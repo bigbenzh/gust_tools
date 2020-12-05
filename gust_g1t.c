@@ -28,7 +28,7 @@
 #include "dds.h"
 
 #define JSON_VERSION            1
-#define GT1G_MAGIC              ((uint32_t)'G1TG')
+#define GT1G_MAGIC              0x47315447  // 'G1TG'
 
 // G1T texture flags
 #define G1T_FLAG_SRGB           0x02000000  // Not sure if this one is correct...
@@ -177,6 +177,8 @@ static void swizzle(const uint32_t bits_per_pixel, const char* in,
 // 'bit_order'.
 // For instance if you have the set of words [ABCDEFGH ABCDEFGH ...] in buf and
 // feed bit_order "210", you get the new set [AECGBFDH AECGBFDH ...]
+// TODO: Change this function to a proper generic morton transformation.
+// See: https://fgiesen.wordpress.com/2011/01/17/texture-tiling-and-swizzling/
 static void transform(const uint32_t bits_per_pixel, const char* bit_order,
                       uint8_t* buf, const uint32_t size)
 {
@@ -334,12 +336,13 @@ int main_utf8(int argc, char** argv)
             goto out;
         if (!flip_image)
             flip_image = json_object_get_boolean(json_object(json), "flip");
-        strcpy_s(path, sizeof(path), argv[argc - 1]);
+        strcpy(path, argv[argc - 1]);
         if (get_trailing_slash(path) != 0)
             path[get_trailing_slash(path)] = 0;
         else
             path[0] = 0;
-        strcat_s(path, sizeof(path), filename);
+        strcat(path, filename);
+        path[sizeof(path) - 1] = 0;
         printf("Creating '%s'...\n", path);
         create_backup(path);
         file = fopen_utf8(path, "wb+");
@@ -590,7 +593,7 @@ int main_utf8(int argc, char** argv)
         char version[5];
         setbe32(version, hdr->version);
         version[4] = 0;
-        if (hdr->version >> 16 != (uint16_t)'00')
+        if (hdr->version >> 16 != 0x3030)
             fprintf(stderr, "WARNING: Potentially unsupported G1T version %s\n", version);
         if (hdr->extra_size != 0) {
             fprintf(stderr, "ERROR: Can't handle G1T files with extra content\n");
@@ -620,7 +623,7 @@ int main_utf8(int argc, char** argv)
         for (size_t i = 0; i < strlen(basename(argv[argc - 1])); i++)
             putchar(' ');
         printf("     DIMENSIONS MIPMAPS SUPPORTED?\n");
-        dir = _strdup(argv[argc - 1]);
+        dir = strdup(argv[argc - 1]);
         if (dir == NULL) {
             fprintf(stderr, "ERROR: Alloc error\n");
             goto out;

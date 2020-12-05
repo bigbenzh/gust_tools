@@ -38,7 +38,7 @@
 #include "miniz_tinfl.h"
 #include "miniz_tdef.h"
 
-#define EARC_MAGIC              ((uint32_t)'EARC')
+#define EARC_MAGIC              0x45415243  // 'EARC'
 #define DEFAULT_CHUNK_SIZE      0x4000
 
 #pragma pack(push, 1)

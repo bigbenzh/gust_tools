@@ -214,7 +214,7 @@
             "main": [
                 0x3e87,
                 0xcac3,
-                0x0000  // Only two main seeds are used
+                0x0000 // Only two main seeds are used
             ],
             "table": [
                 0xa8e5,
@@ -228,5 +228,5 @@
             ],
             "fence": 0x0755
         }
-   ]
+    ]
 }
