@@ -34,6 +34,13 @@
 #define G1T_FLAG_SRGB           0x02000000  // Not sure if this one is correct...
 #define G1T_FLAG_EXTRA_CONTENT  0x10000000
 
+// Known platforms
+#define SONY_PS3                0x01        // Big Endian!
+#define NINTENDO_DS             0x05
+#define SONY_PSV                0x06
+#define IMB_PC                  0x0A
+#define NINTENDO_SWITCH         0x10
+
 #pragma pack(push, 1)
 typedef struct {
     uint32_t    magic;
@@ -86,8 +93,8 @@ const char* transform_op[] = {
 #define TRANSFORM_N     1
 #define NO_TILING       0
 
-static size_t write_dds_header(FILE* fd, int format, uint32_t width,
-                               uint32_t height, uint32_t mipmaps, uint32_t flags)
+static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t height,
+                               uint32_t bpp, uint32_t mipmaps, uint32_t flags)
 {
     if ((fd == NULL) || (width == 0) || (height == 0))
         return 0;
@@ -100,18 +107,49 @@ static size_t write_dds_header(FILE* fd, int format, uint32_t width,
     header.ddspf.size = 32;
     if (format == DDS_FORMAT_BGR) {
         header.ddspf.flags = DDS_RGB;
-        header.ddspf.RGBBitCount = 24;
-        header.ddspf.RBitMask = 0x00ff0000;
-        header.ddspf.GBitMask = 0x0000ff00;
-        header.ddspf.BBitMask = 0x000000ff;
+        header.ddspf.RGBBitCount = bpp;
+        switch (bpp) {
+        case 24:
+            header.ddspf.RBitMask = 0x00ff0000;
+            header.ddspf.GBitMask = 0x0000ff00;
+            header.ddspf.BBitMask = 0x000000ff;
+            break;
+        default:
+            fprintf(stderr, "ERROR: Unsupported bits-per-pixel value %d\n", bpp);
+            return 0;
+        }
     } else if (format >= DDS_FORMAT_ABGR && format <= DDS_FORMAT_RGBA) {
         header.ddspf.flags = DDS_RGBA;
-        header.ddspf.RGBBitCount = 32;
+        header.ddspf.RGBBitCount = bpp;
         // Always save as ARGB, to keep VS and PhotoShop happy
-        header.ddspf.RBitMask = 0x00ff0000;
-        header.ddspf.GBitMask = 0x0000ff00;
-        header.ddspf.BBitMask = 0x000000ff;
-        header.ddspf.ABitMask = 0xff000000;
+        switch (bpp) {
+        case 32:
+            header.ddspf.RBitMask = 0x00ff0000;
+            header.ddspf.GBitMask = 0x0000ff00;
+            header.ddspf.BBitMask = 0x000000ff;
+            header.ddspf.ABitMask = 0xff000000;
+            break;
+        // I have absolutely no idea if the following will work...
+        case 64:
+            header.ddspf.RBitMask = 0x0000ffff;
+            header.ddspf.GBitMask = 0xffff0000;
+            header.ddspf.BBitMask = 0x0000ffff;
+            header.ddspf.ABitMask = 0xffff0000;
+            break;
+        case 128:
+            header.ddspf.RBitMask = 0xffffffff;
+            header.ddspf.GBitMask = 0xffffffff;
+            header.ddspf.BBitMask = 0xffffffff;
+            header.ddspf.ABitMask = 0xffffffff;
+            break;
+        default:
+            fprintf(stderr, "ERROR: Unsupported bits-per-pixel value %d\n", bpp);
+            return 0;
+        }
+    } else if (format == DDS_FORMAT_R) {
+        header.ddspf.flags = DDS_RGBA;
+        header.ddspf.RGBBitCount = bpp;
+        header.ddspf.RBitMask = (uint32_t)((1ULL << bpp) - 1);
     } else {
         header.ddspf.flags = DDS_FOURCC;
         header.ddspf.fourCC = get_fourCC(format);
@@ -459,15 +497,34 @@ int main_utf8(int argc, char** argv)
                     }
                 }
             }
+
+            // Set the default swizzle for the platform
+            uint32_t platform_sw;
+            switch (hdr.platform) {
+            case NINTENDO_DS:
+                platform_sw = ARGB_TO_GRAB;
+                break;
+            case SONY_PSV:
+            case NINTENDO_SWITCH:
+                platform_sw = NO_SWIZZLE;    // Already ARGB
+                break;
+            default:    // PC and other platforms
+                platform_sw = ARGB_TO_RGBA;
+                break;
+            }
+
             uint32_t bits_per_pixel = 0, sw = NO_SWIZZLE, tl = NO_TILING, tr = NO_TRANSFORM;
             bool supported = true;
             switch (tex.type) {
-            case 0x00: bits_per_pixel = 32; sw = ARGB_TO_ABGR; break;
-            case 0x01: bits_per_pixel = 32; sw = ARGB_TO_ABGR; break;
+            case 0x00: bits_per_pixel = 32; sw = platform_sw; break;
+            case 0x01: bits_per_pixel = 32; sw = platform_sw; break;
+            case 0x02: bits_per_pixel = 32; sw = platform_sw; break;
+            case 0x03: bits_per_pixel = 64; sw = platform_sw; supported = false; break;     // UNSUPPORTED!!
+            case 0x04: bits_per_pixel = 128; sw = platform_sw; supported = false; break;    // UNSUPPORTED!!
             case 0x06: bits_per_pixel = 4; break;
             case 0x07: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
             case 0x08: bits_per_pixel = 8; break;
-            case 0x09: bits_per_pixel = 32; sw = ARGB_TO_GRAB; tl = 8; tr = TRANSFORM_N; break;
+            case 0x09: bits_per_pixel = 32; sw = platform_sw; tl = 8; tr = TRANSFORM_N; break;
             case 0x10: bits_per_pixel = 4; supported = false; break;    // UNSUPPORTED!!
             case 0x12: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
             case 0x21: bits_per_pixel = 32; break;
@@ -492,9 +549,8 @@ int main_utf8(int argc, char** argv)
 
             switch (dds_header->ddspf.flags) {
             case DDS_RGBA:
-                if ((dds_header->ddspf.RGBBitCount != 32) ||
-                    (dds_header->ddspf.RBitMask != 0x00ff0000) || (dds_header->ddspf.GBitMask != 0x0000ff00) ||
-                    (dds_header->ddspf.BBitMask != 0x000000ff) || (dds_header->ddspf.ABitMask != 0xff000000)) {
+                if ((dds_header->ddspf.RGBBitCount != 32) && (dds_header->ddspf.RGBBitCount != 64) &&
+                    (dds_header->ddspf.RGBBitCount != 128)) {
                     fprintf(stderr, "ERROR: '%s' is not an ARGB texture we support\n", path);
                     goto out;
                 }
@@ -513,7 +569,7 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
 
-            if (flip_image)
+            if (flip_image || ((hdr.platform == NINTENDO_DS) && (tex.type == 0x45)))
                 flip(bits_per_pixel, dds_payload, dds_size, dds_header->width);
             if (sw != NO_SWIZZLE)
                 swizzle(bits_per_pixel, swizzle_op[sw].in, swizzle_op[sw].out, dds_payload, dds_size);
@@ -629,6 +685,22 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
         dir[get_trailing_slash(dir)] = 0;
+
+        // Set the default RGBA texture format for the platform
+        uint32_t default_texture_format;
+        switch (hdr->platform) {
+        case NINTENDO_DS:
+            default_texture_format = DDS_FORMAT_GRAB;
+            break;
+        case SONY_PSV:
+        case NINTENDO_SWITCH:
+            default_texture_format = DDS_FORMAT_ARGB;
+            break;
+        default:    // PC and other platforms
+            default_texture_format = DDS_FORMAT_RGBA;
+            break;
+        }
+
         for (uint32_t i = 0; i < hdr->nb_textures; i++) {
             // There's an array of flags after the hdr
             json_array_append_number(json_array(json_flags_array), getle32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]));
@@ -651,19 +723,21 @@ int main_utf8(int argc, char** argv)
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "flags", tex->flags);
-            uint32_t texture_format, bits_per_pixel;
+            uint32_t texture_format = default_texture_format, bits_per_pixel;
             bool supported = true;
             switch (tex->type) {
-            case 0x00: texture_format = DDS_FORMAT_ABGR; bits_per_pixel = 32; break;
-            // Note: Type 0x01 may also be DDS_FORMAT_ARGB for PS Vita images
-            case 0x01: texture_format = DDS_FORMAT_RGBA; bits_per_pixel = 32; break;
+            case 0x00: bits_per_pixel = 32; break;
+            case 0x01: bits_per_pixel = 32; break;
+            case 0x02: bits_per_pixel = 32; break;
+            case 0x03: bits_per_pixel = 64; supported = false; break;       // UNSUPPORTED!!
+            case 0x04: bits_per_pixel = 128; supported = false; break;      // UNSUPPORTED!!
             case 0x06: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; break;
             case 0x07: texture_format = DDS_FORMAT_DXT3; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
             case 0x08: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; break;
-            case 0x09: texture_format = DDS_FORMAT_GRAB; bits_per_pixel = 32; break;
+            case 0x09: bits_per_pixel = 32; break;
             case 0x10: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; supported = false; break;  // UNSUPPORTED!!
             case 0x12: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
-            case 0x21: texture_format = DDS_FORMAT_ARGB; bits_per_pixel = 32; break;
+            case 0x21: bits_per_pixel = 32; break;
             case 0x3C: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 16; supported = false; break; // UNSUPPORTED!!
             case 0x3D: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 16; supported = false; break; // UNSUPPORTED!!
             case 0x45: texture_format = DDS_FORMAT_BGR; bits_per_pixel = 24; break;
@@ -708,7 +782,8 @@ int main_utf8(int argc, char** argv)
                 fclose(dst);
                 continue;
             }
-            if (write_dds_header(dst, texture_format, width, height, tex->mipmaps, tex->flags) != 1) {
+            if (write_dds_header(dst, texture_format, width, height, bits_per_pixel,
+                                 tex->mipmaps, tex->flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
                 continue;
@@ -726,7 +801,7 @@ int main_utf8(int argc, char** argv)
                 }
                 pos += extra_size;
             }
-            // RGBA-like textures require swizzling to be applied, since
+            // Non ARGB textures require swizzling to be applied, since
             // tools like Visual Studio or PhotoShop can't be bothered
             // to honour the swizzling from the DDS header and instead
             // insist on using ARGB always...
@@ -757,7 +832,7 @@ int main_utf8(int argc, char** argv)
             default:
                 break;
             }
-            if (flip_image)
+            if (flip_image || ((hdr->platform == NINTENDO_DS) && (tex->type == 0x45)))
                 flip(bits_per_pixel, &buf[pos], texture_size, width);
             if (fwrite(&buf[pos], texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
