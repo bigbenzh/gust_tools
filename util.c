@@ -27,7 +27,7 @@
 bool create_path(char* path)
 {
     bool result = true;
-    struct stat64 st;
+    struct stat64_t st;
     if (stat64_utf8(path, &st) != 0) {
         // Directory doesn't exist, create it
         size_t pos = 0;
@@ -63,25 +63,25 @@ bool create_path(char* path)
 
 bool is_file(const char* path)
 {
-    struct stat64 st;
+    struct stat64_t st;
     return (stat64_utf8(path, &st) == 0) && S_ISREG(st.st_mode);
 }
 
 bool is_directory(const char* path)
 {
-    struct stat64 st;
+    struct stat64_t st;
     return (stat64_utf8(path, &st) == 0) && S_ISDIR(st.st_mode);
 }
 
 char* change_extension(const char* path, const char* extension)
 {
-    static char new_path[256];
-    strncpy(new_path, basename(path), sizeof(new_path) - 1);
+    static char new_path[PATH_MAX];
+    strncpy(new_path, basename((char*)path), sizeof(new_path) - 1);
     for (size_t i = 0; i < sizeof(new_path); i++) {
         if (new_path[i] == '.')
             new_path[i] = 0;
     }
-    strncat(new_path, extension, sizeof(new_path) - strlen(new_path));
+    strncat(new_path, extension, sizeof(new_path) - strlen(new_path) - 1);
     return new_path;
 }
 
@@ -94,7 +94,7 @@ size_t get_trailing_slash(const char* path)
     return (i == 0) ? 0: i + 1;
 }
 
-uint32_t read_file(const char* path, uint8_t** buf)
+uint32_t read_file_max(const char* path, uint8_t** buf, uint32_t max_size)
 {
     FILE* file = fopen_utf8(path, "rb");
     if (file == NULL) {
@@ -105,6 +105,8 @@ uint32_t read_file(const char* path, uint8_t** buf)
     fseek(file, 0L, SEEK_END);
     uint32_t size = (uint32_t)ftell(file);
     fseek(file, 0L, SEEK_SET);
+    if (max_size != 0)
+        size = min(size, max_size);
 
     *buf = calloc(size, 1);
     if (*buf == NULL) {
@@ -124,9 +126,23 @@ out:
     return size;
 }
 
+uint64_t get_file_size(const char* path)
+{
+    FILE* file = fopen_utf8(path, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "ERROR: Can't open '%s'\n", path);
+        return 0;
+    }
+
+    fseek(file, 0L, SEEK_END);
+    uint64_t size = ftell64(file);
+    fclose(file);
+    return size;
+}
+
 void create_backup(const char* path)
 {
-    struct stat64 st;
+    struct stat64_t st;
     if (stat64_utf8(path, &st) == 0) {
         char* backup_path = malloc(strlen(path) + 5);
         if (backup_path == NULL)

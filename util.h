@@ -22,6 +22,9 @@
 #include <crtdbg.h>
 #endif
 
+#if defined(__APPLE__)
+#include <libgen.h>
+#endif
 #include <stdbool.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -50,10 +53,19 @@
 #define CREATE_DIR(path) CreateDirectoryA(path, NULL)
 #define PATH_SEP '\\'
 #else
+#if defined(__APPLE__)
+#define ftell64 ftello
+#define fseek64 fseeko
+#else
 #define ftell64 ftello64
 #define fseek64 fseeko64
+#endif
 #define CREATE_DIR(path) (mkdir(path, 0755) == 0)
 #define PATH_SEP '/'
+#endif
+
+#ifndef PATH_MAX
+#define PATH_MAX 1024
 #endif
 
 #ifndef min
@@ -206,6 +218,8 @@ size_t get_trailing_slash(const char* path);
 bool is_file(const char* path);
 bool is_directory(const char* path);
 
-uint32_t read_file(const char* path, uint8_t** buf);
+uint32_t read_file_max(const char* path, uint8_t** buf, uint32_t max_size);
+#define read_file(path, buf) read_file_max(path, buf, 0)
+uint64_t get_file_size(const char* path);
 void create_backup(const char* path);
 bool write_file(const uint8_t* buf, const uint32_t size, const char* path, const bool backup);
