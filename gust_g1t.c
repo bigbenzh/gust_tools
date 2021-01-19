@@ -1,6 +1,6 @@
 /*
   gust_g1t - DDS texture unpacker for Gust (Koei/Tecmo) .g1t files
-  Copyright © 2019-2020 VitaSmith
+  Copyright © 2019-2021 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -35,10 +35,19 @@
 #define G1T_FLAG_EXTRA_CONTENT  0x10000000
 
 // Known platforms
-#define SONY_PS3                0x01        // Big Endian!
-#define NINTENDO_DS             0x05
+#define SONY_PS2                0x00
+#define SONY_PS3                0x01        // Big Endian => unsupported!
+#define MICROSOFT_X360          0x02
+#define NINTENDO_WII            0x03
+#define NINTENDO_DS             0x04
+#define NINTENDO_3DS            0x05
 #define SONY_PSV                0x06
-#define IMB_PC                  0x0A
+#define GOOGLE_ANDROID          0x07
+#define APPLE_IOS               0x08
+#define NINTENDO_WIIU           0x09
+#define MICROSOFT_WINDOWS       0x0A
+#define SONY_PS4                0x0B
+#define MICROSOFT_XONE          0x0C
 #define NINTENDO_SWITCH         0x10
 
 #pragma pack(push, 1)
@@ -48,7 +57,7 @@ typedef struct {
     uint32_t    total_size;
     uint32_t    header_size;
     uint32_t    nb_textures;
-    uint32_t    platform;       // 0x05 = Nintendo DS, 0x06 = PS Vita, 0x0A = PC, 0x10 = Nintendo Switch
+    uint32_t    platform;       // See the platforms list above
     uint32_t    extra_size;
 } g1t_header;
 
@@ -80,18 +89,34 @@ swizzle_t swizzle_op[] = {
     { "ARGB", "GRAB" },
 };
 
-const char* transform_op[] = {
+// Morton => interleave the low order bits with high order.
+// This array is indexed by the morton order, i.e. the number of bits
+// that should be interleaved. Note that specifying the last bit for
+// a Morton transformation is useless here, but we do it for clarity.
+const char* morton[] = {
     NULL,
-    "02413",
+    "01",
+    "0213",
+    "031425",
+    "04152637",
+    "0516273849",
+    "061728394a5b",
+};
+
+// Inverse Morton => split interleaved bits in high and low order.
+const char* notrom[] = {
+    NULL,
+    "01",
+    "0213",
+    "024135",
+    "02461357",
+    "0246813579",
 };
 
 #define NO_SWIZZLE      0
 #define ARGB_TO_ABGR    1
 #define ARGB_TO_RGBA    2
 #define ARGB_TO_GRAB    3
-#define NO_TRANSFORM    0
-#define TRANSFORM_N     1
-#define NO_TILING       0
 
 static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t height,
                                uint32_t bpp, uint32_t mipmaps, uint32_t flags)
@@ -214,16 +239,18 @@ static void swizzle(const uint32_t bits_per_pixel, const char* in,
 // word from position t(x), where t(x) is x with bits reorganized according to
 // 'bit_order'.
 // For instance if you have the set of words [ABCDEFGH ABCDEFGH ...] in buf and
-// feed bit_order "210", you get the new set [AECGBFDH AECGBFDH ...]
-// TODO: Change this function to a proper generic morton transformation.
-// See: https://fgiesen.wordpress.com/2011/01/17/texture-tiling-and-swizzling/
+// feed bit_order "210", you get the new set [AECGBFDH AECGBFDH ...].
+// With the proper pattern, this can be used to apply a Morton or inverse Morton
+// transformation to a square texture that uses a power of 2 for width/height.
+// The total number of elements in the data set must always be a power of two.
 static void transform(const uint32_t bits_per_pixel, const char* bit_order,
                       uint8_t* buf, const uint32_t size)
 {
     assert(bits_per_pixel % 8 == 0);
     const uint32_t bytes_per_pixel = bits_per_pixel / 8;
-    assert((bytes_per_pixel >= 2) && (bytes_per_pixel <= 4));
+    assert((bytes_per_pixel >= 1) && (bytes_per_pixel <= 4));
     assert(size % bytes_per_pixel == 0);
+    assert(is_power_of_2(size / bytes_per_pixel));
 
     const char* bit_pos = "0123456789abcdef";
     uint32_t bit_size = (uint32_t)strlen(bit_order);
@@ -246,11 +273,7 @@ static void transform(const uint32_t bits_per_pixel, const char* bit_order,
             mask <<= 1;
         }
         src_index += (i >> bit_size) << bit_size;
-        switch (bits_per_pixel) {
-        case 16: setle16(&tmp_buf[bytes_per_pixel * i], getle16(&buf[src_index * bytes_per_pixel])); break;
-        case 24: setle24(&tmp_buf[bytes_per_pixel * i], getle24(&buf[src_index * bytes_per_pixel])); break;
-        default: setle32(&tmp_buf[bytes_per_pixel * i], getle32(&buf[src_index * bytes_per_pixel])); break;
-        }
+        memcpy(&tmp_buf[bytes_per_pixel * i], &buf[src_index * bytes_per_pixel], bytes_per_pixel);
     }
     memcpy(buf, tmp_buf, size);
     free(tmp_buf);
@@ -287,7 +310,7 @@ static void untile(const uint32_t bits_per_pixel, uint32_t tile_size, uint32_t w
 {
     assert(bits_per_pixel % 8 == 0);
     const uint32_t bytes_per_pixel = bits_per_pixel / 8;
-    assert((bytes_per_pixel >= 2) && (bytes_per_pixel <= 4));
+    assert((bytes_per_pixel >= 1) && (bytes_per_pixel <= 4));
     assert(size % bytes_per_pixel == 0);
     assert(size % (tile_size * tile_size) == 0);
     assert(width % tile_size == 0);
@@ -338,7 +361,7 @@ int main_utf8(int argc, char** argv)
     bool flip_image = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'f');
 
     if ((argc != 2) && !list_only && !flip_image) {
-        printf("%s %s (c) 2019-2020 VitaSmith\n\n"
+        printf("%s %s (c) 2019-2021 VitaSmith\n\n"
             "Usage: %s [-l] [-f] <file or directory>\n\n"
             "Extracts (file) or recreates (directory) a Gust .g1t texture archive.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
@@ -502,6 +525,8 @@ int main_utf8(int argc, char** argv)
             uint32_t platform_sw;
             switch (hdr.platform) {
             case NINTENDO_DS:
+            case NINTENDO_3DS:
+            case SONY_PS4:
                 platform_sw = ARGB_TO_GRAB;
                 break;
             case SONY_PSV:
@@ -513,7 +538,8 @@ int main_utf8(int argc, char** argv)
                 break;
             }
 
-            uint32_t bits_per_pixel = 0, sw = NO_SWIZZLE, tl = NO_TILING, tr = NO_TRANSFORM;
+            uint32_t bits_per_pixel = 0, sw = NO_SWIZZLE;
+            uint16_t morton_order = 0;
             bool supported = true;
             switch (tex.type) {
             case 0x00: bits_per_pixel = 32; sw = platform_sw; break;
@@ -524,13 +550,13 @@ int main_utf8(int argc, char** argv)
             case 0x06: bits_per_pixel = 4; break;
             case 0x07: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
             case 0x08: bits_per_pixel = 8; break;
-            case 0x09: bits_per_pixel = 32; sw = platform_sw; tl = 8; tr = TRANSFORM_N; break;
+            case 0x09: bits_per_pixel = 32; sw = platform_sw; morton_order = 3; break;
             case 0x10: bits_per_pixel = 4; supported = false; break;    // UNSUPPORTED!!
             case 0x12: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
             case 0x21: bits_per_pixel = 32; break;
             case 0x3C: bits_per_pixel = 16; supported = false; break;   // UNSUPPORTED!!
             case 0x3D: bits_per_pixel = 16; supported = false; break;   // UNSUPPORTED!!
-            case 0x45: bits_per_pixel = 24; tl = 8; tr = TRANSFORM_N; break;
+            case 0x45: bits_per_pixel = 24; morton_order = 3; break;
             case 0x59: bits_per_pixel = 4; break;
             case 0x5B: bits_per_pixel = 8; break;
             case 0x5C: bits_per_pixel = 4; break;
@@ -569,14 +595,15 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
 
-            if (flip_image || ((hdr.platform == NINTENDO_DS) && (tex.type == 0x45)))
+            if (flip_image || ((hdr.platform == NINTENDO_3DS) && (tex.type == 0x45)))
                 flip(bits_per_pixel, dds_payload, dds_size, dds_header->width);
             if (sw != NO_SWIZZLE)
                 swizzle(bits_per_pixel, swizzle_op[sw].in, swizzle_op[sw].out, dds_payload, dds_size);
-            if (tl != NO_TILING)
-                tile(bits_per_pixel, tl, dds_header->width, dds_payload, dds_size);
-            if (tr != NO_TRANSFORM)
-                transform(bits_per_pixel, transform_op[tr], dds_payload, dds_size);
+            if (morton_order != 0) {
+                assert(morton_order < ARRAYSIZE(notrom));
+                tile(bits_per_pixel, 1 << morton_order, dds_header->width, dds_payload, dds_size);
+                transform(bits_per_pixel, notrom[morton_order], dds_payload, dds_size);
+            }
 
             // Write texture
             if (fwrite(dds_payload, 1, dds_size, file) != dds_size) {
@@ -626,7 +653,7 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
         if (magic != GT1G_MAGIC) {
-            fprintf(stderr, "ERROR: Not a G1T file (bad magic)");
+            fprintf(stderr, "ERROR: Not a G1T file (bad magic) or unsupported platform");
             goto out;
         }
         fseek(file, 0L, SEEK_END);
@@ -690,6 +717,8 @@ int main_utf8(int argc, char** argv)
         uint32_t default_texture_format;
         switch (hdr->platform) {
         case NINTENDO_DS:
+        case NINTENDO_3DS:
+        case SONY_PS4:
             default_texture_format = DDS_FORMAT_GRAB;
             break;
         case SONY_PSV:
@@ -724,6 +753,7 @@ int main_utf8(int argc, char** argv)
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "flags", tex->flags);
             uint32_t texture_format = default_texture_format, bits_per_pixel;
+            uint16_t morton_order = 0;
             bool supported = true;
             switch (tex->type) {
             case 0x00: bits_per_pixel = 32; break;
@@ -734,13 +764,13 @@ int main_utf8(int argc, char** argv)
             case 0x06: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; break;
             case 0x07: texture_format = DDS_FORMAT_DXT3; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
             case 0x08: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; break;
-            case 0x09: bits_per_pixel = 32; break;
+            case 0x09: bits_per_pixel = 32; morton_order = 3; break;
             case 0x10: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; supported = false; break;  // UNSUPPORTED!!
             case 0x12: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
             case 0x21: bits_per_pixel = 32; break;
             case 0x3C: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 16; supported = false; break; // UNSUPPORTED!!
             case 0x3D: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 16; supported = false; break; // UNSUPPORTED!!
-            case 0x45: texture_format = DDS_FORMAT_BGR; bits_per_pixel = 24; break;
+            case 0x45: texture_format = DDS_FORMAT_BGR; bits_per_pixel = 24; morton_order = 3; break;
             case 0x59: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; break;
             case 0x5B: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; break;
             case 0x5C: texture_format = DDS_FORMAT_BC4; bits_per_pixel = 4; break;
@@ -819,20 +849,12 @@ int main_utf8(int argc, char** argv)
                 break;
             }
             // Additional transformations
-            switch (tex->type) {
-            case 0x09:
-            case 0x45:
-                // This data format appears to be used for portable console
-                // assets. Not only is it 8x8 tiled but it also requires
-                // 4x'И' transpositions within each tile, for groups of
-                // 2x2 pixels, which we enact through generic transform.
-                transform(bits_per_pixel, "03142", &buf[pos], texture_size);
-                untile(bits_per_pixel, 8, width, &buf[pos], texture_size);
-                break;
-            default:
-                break;
+            if (morton_order != 0) {
+                assert(morton_order < ARRAYSIZE(morton));
+                transform(bits_per_pixel, morton[morton_order], &buf[pos], texture_size);
+                untile(bits_per_pixel, 1 << morton_order, width, &buf[pos], texture_size);
             }
-            if (flip_image || ((hdr->platform == NINTENDO_DS) && (tex->type == 0x45)))
+            if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x45)))
                 flip(bits_per_pixel, &buf[pos], texture_size, width);
             if (fwrite(&buf[pos], texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
