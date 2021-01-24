@@ -21,6 +21,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 
 #include "utf8.h"
 #include "util.h"
@@ -87,30 +88,6 @@ swizzle_t swizzle_op[] = {
     { "ARGB", "ABGR" },
     { "ARGB", "RGBA" },
     { "ARGB", "GRAB" },
-};
-
-// Morton => interleave the low order bits with high order.
-// This array is indexed by the morton order, i.e. the number of bits
-// that should be interleaved. Note that specifying the last bit for
-// a Morton transformation is useless here, but we do it for clarity.
-const char* morton[] = {
-    NULL,
-    "01",
-    "0213",
-    "031425",
-    "04152637",
-    "0516273849",
-    "061728394a5b",
-};
-
-// Inverse Morton => split interleaved bits in high and low order.
-const char* notrom[] = {
-    NULL,
-    "01",
-    "0213",
-    "024135",
-    "02461357",
-    "0246813579",
 };
 
 #define NO_SWIZZLE      0
@@ -235,102 +212,122 @@ static void swizzle(const uint32_t bits_per_pixel, const char* in,
     }
 }
 
-// This function permutes the words of all positions x in a dataset with the
-// word from position t(x), where t(x) is x with bits reorganized according to
-// 'bit_order'.
-// For instance if you have the set of words [ABCDEFGH ABCDEFGH ...] in buf and
-// feed bit_order "210", you get the new set [AECGBFDH AECGBFDH ...].
-// With the proper pattern, this can be used to apply a Morton or inverse Morton
-// transformation to a square texture that uses a power of 2 for width/height.
-// The total number of elements in the data set must always be a power of two.
-static void transform(const uint32_t bits_per_pixel, const char* bit_order,
-                      uint8_t* buf, const uint32_t size)
+// "Inflate" a 32 bit value by interleaving 0 bits at odd positions.
+static __inline uint32_t inflate_bits(uint32_t x)
 {
-    assert(bits_per_pixel % 8 == 0);
-    const uint32_t bytes_per_pixel = bits_per_pixel / 8;
-    assert((bytes_per_pixel >= 1) && (bytes_per_pixel <= 4));
-    assert(size % bytes_per_pixel == 0);
-    assert(is_power_of_2(size / bytes_per_pixel));
+    x &= 0x0000FFFF;
+    x = (x | (x << 8))  & 0x00FF00FF;
+    x = (x | (x << 4))  & 0x0F0F0F0F;
+    x = (x | (x << 2))  & 0x33333333;
+    x = (x | (x << 1))  & 0x55555555;
+    return x;
+}
 
-    const char* bit_pos = "0123456789abcdef";
-    uint32_t bit_size = (uint32_t)strlen(bit_order);
+// "Deflate" a 32-bit value by deinterleaving all odd bits.
+static __inline uint32_t deflate_bits(uint32_t x)
+{
+    x &= 0x55555555;
+    x = (x | (x >> 1))  & 0x33333333;
+    x = (x | (x >> 2))  & 0x0F0F0F0F;
+    x = (x | (x >> 4))  & 0x00FF00FF;
+    x = (x | (x >> 8))  & 0x0000FFFF;
+    return x;
+}
 
-    // "64K should be enough for everyone"
-    assert(strlen(bit_pos) == 16);
-    assert(bit_size <= 16);
+// From two 32-bit (x,y) coordinates, compute the 64-bit Morton (or Z-order) value.
+// If invert is true, x and y are inverted.
+static __inline uint32_t xy_to_morton(uint32_t x, uint32_t y, bool invert)
+{
+    return (inflate_bits(x) << (invert ? 1 : 0)) |
+           (inflate_bits(y) << (invert ? 0 : 1));
+}
 
-    int32_t rot[16];
-    for (uint32_t i = 0; i < bit_size; i++) {
-        rot[i] = (int32_t)((uintptr_t)strchr(bit_order, bit_pos[i]) - (uintptr_t)bit_order) - i;
-    }
+// Fom a 32-bit Morton (Z-order) value, recover two 32-bit (x,y) coordinates.
+// If invert is true, x and y are inverted.
+static __inline void morton_to_xy(uint32_t z, uint32_t* x, uint32_t* y, bool invert)
+{
+    *x = deflate_bits(z >> (invert ? 1 : 0));
+    *y = deflate_bits(z >> (invert ? 0 : 1));
+}
 
+// Apply (reverse = false) or remove (reverse = true) a Morton transformation
+// a.k.a. a Z-order curve to a texture.
+// The Morton order can be negative, in which case the effective Morton order
+// is the absolute value and the odd/even bit positions for x and y are inverted.
+static void mortonizer(const uint32_t bits_per_element, const int16_t morton_order,
+                       const uint32_t width, const uint32_t height,
+                       uint8_t* buf, const uint32_t size, bool reverse)
+{
+    const uint32_t bytes_per_element = bits_per_element / 8;
+    uint32_t nblocks = size / bytes_per_element;
+    uint16_t k = (int16_t)abs(morton_order);
+    bool invert = (morton_order != (int16_t)k);
+
+    // Only deal with elements that are multiple of one byte in size
+    assert(bits_per_element % 8 == 0);
+    // Validate that the size of the buffer matches the dimensions provided
+    assert(bytes_per_element * width * height == size);
+    // Only deal with texture that are smaller than 64k*64k
+    assert((width < 0x10000) && (height < 0x10000));
+    // Ensure that we won't produce x or y that are larger than width or height
+    assert(k <= log2(min(width, height)));
+    // Help masks to isolate the mortonized and unmortonized part of our source indices
+    uint32_t low_mask = (1 << (2 * k)) - 1;
+    uint32_t high_mask = ~low_mask;
     uint8_t* tmp_buf = (uint8_t*)malloc(size);
-    for (uint32_t i = 0; i < (size / bytes_per_pixel); i++) {
-        uint32_t mask = 1;
-        uint32_t src_index = 0;
-        for (uint32_t j = 0; j < bit_size; j++) {
-            src_index |= ((rot[j] > 0) ? ((i & mask) << rot[j]) : ((i & mask) >> -rot[j]));
-            mask <<= 1;
+    for (uint32_t i = 0; i < nblocks; i++) {
+        uint32_t x, y;  // Coordinates in each 2^k by 2^k square
+        // Note that we don't need to mask x or y with (2^k - 1)
+        // since we apply low_mask to the Morton value.
+        uint32_t j = i & high_mask; // Destination index, high part
+        if (!reverse) { // Morton value from an (x,y) pair
+            x = i; y = i >> k;
+            j |= xy_to_morton(x, y, invert) & low_mask;
+        } else {        // (x,y) pair from a Morton value
+            morton_to_xy(i & low_mask, &x, &y, invert);
+            j |= (y << k) | x;
         }
-        src_index += (i >> bit_size) << bit_size;
-        memcpy(&tmp_buf[bytes_per_pixel * i], &buf[src_index * bytes_per_pixel], bytes_per_pixel);
+        memcpy(&tmp_buf[j * bytes_per_element], &buf[i * bytes_per_element], bytes_per_element);
     }
     memcpy(buf, tmp_buf, size);
     free(tmp_buf);
 }
 
-static void tile(const uint32_t bits_per_pixel, uint32_t tile_size, uint32_t width,
-                 uint8_t* buf, const uint32_t size)
+#define mortonize(bpe, k, w, h, buf, size) mortonizer(bpe, k, w, h, buf, size, false)
+#define unmortonize(bpe, k, w, h, buf, size) mortonizer(bpe, k, w, h, buf, size, true)
+
+// An element can be a pixel (for uncompressed textures) or a group of pixels (for DXT1, DXT5...)
+// A positive tile_size performs tiling. A negative tile_size performs untiling.
+static void tiler(const uint32_t bits_per_element, uint32_t tile_size, uint32_t width,
+                 uint8_t* buf, const uint32_t size, bool untile)
 {
-    assert(bits_per_pixel % 8 == 0);
-    const uint32_t bytes_per_pixel = bits_per_pixel / 8;
-    assert((bytes_per_pixel >= 2) && (bytes_per_pixel <= 4));
-    assert(size % bytes_per_pixel == 0);
-    assert (size % (tile_size * tile_size) == 0);
-
-    uint8_t* tmp_buf = (uint8_t*)malloc(size);
-
-    for (uint32_t i = 0; i < size / bytes_per_pixel / tile_size / tile_size; i++) {
-        uint32_t tile_row = i / (width / tile_size);
-        uint32_t tile_column = i % (width / tile_size);
-        uint32_t tile_start = tile_row * width * tile_size + tile_column * tile_size;
-        for (uint32_t j = 0; j < tile_size; j++) {
-            memcpy(&tmp_buf[bytes_per_pixel * (i * tile_size * tile_size + j * tile_size)],
-                &buf[bytes_per_pixel * (tile_start + j * width)],
-                (size_t)tile_size * bytes_per_pixel);
-        }
-    }
-
-    memcpy(buf, tmp_buf, size);
-    free(tmp_buf);
-}
-
-static void untile(const uint32_t bits_per_pixel, uint32_t tile_size, uint32_t width,
-                   uint8_t* buf, const uint32_t size)
-{
-    assert(bits_per_pixel % 8 == 0);
-    const uint32_t bytes_per_pixel = bits_per_pixel / 8;
-    assert((bytes_per_pixel >= 1) && (bytes_per_pixel <= 4));
-    assert(size % bytes_per_pixel == 0);
+    assert(bits_per_element % 8 == 0);
+    const uint32_t bytes_per_element = bits_per_element / 8;
+    assert((bytes_per_element >= 1) && (bytes_per_element <= 8));
+    assert(size % bytes_per_element == 0);
     assert(size % (tile_size * tile_size) == 0);
-    assert(width % tile_size == 0);
 
     uint8_t* tmp_buf = (uint8_t*)malloc(size);
 
-    for (uint32_t i = 0; i < size / bytes_per_pixel / tile_size / tile_size; i++) {
+    for (uint32_t i = 0; i < size / bytes_per_element / tile_size / tile_size; i++) {
         uint32_t tile_row = i / (width / tile_size);
         uint32_t tile_column = i % (width / tile_size);
         uint32_t tile_start = tile_row * width * tile_size + tile_column * tile_size;
         for (uint32_t j = 0; j < tile_size; j++) {
-            memcpy(&tmp_buf[bytes_per_pixel * (tile_start + j * width)],
-                &buf[bytes_per_pixel * (i * tile_size * tile_size + j * tile_size)],
-                (size_t)tile_size * bytes_per_pixel);
+            uint32_t addr[2];
+            addr[0] = bytes_per_element * (tile_start + j * width);
+            addr[1] = bytes_per_element * (i * tile_size * tile_size + j * tile_size);
+            memcpy(&tmp_buf[addr[untile ? 0 : 1]], &buf[addr[untile ? 1 : 0]],
+                   (size_t)tile_size * bytes_per_element);
         }
     }
 
     memcpy(buf, tmp_buf, size);
     free(tmp_buf);
 }
+
+#define tile(bpe, ts, w, buf, size) tiler(bpe, ts, w, buf, size, false)
+#define untile(bpe, ts, w, buf, size) tiler(bpe, ts, w, buf, size, true)
 
 static void flip(uint32_t bits_per_pixel, uint8_t* buf, const uint32_t size, uint32_t width)
 {
@@ -537,39 +534,40 @@ int main_utf8(int argc, char** argv)
                 platform_sw = ARGB_TO_RGBA;
                 break;
             }
-
-            uint32_t bits_per_pixel = 0, sw = NO_SWIZZLE;
-            uint16_t morton_order = 0;
+            // See other similar section below for more details on these
+            uint32_t bpp = 0, sw = NO_SWIZZLE, wf = 1, hf = 1, ts = 0;
+            int16_t mo = 0;
             bool supported = true;
             switch (tex.type) {
-            case 0x00: bits_per_pixel = 32; sw = platform_sw; break;
-            case 0x01: bits_per_pixel = 32; sw = platform_sw; break;
-            case 0x02: bits_per_pixel = 32; sw = platform_sw; break;
-            case 0x03: bits_per_pixel = 64; sw = platform_sw; supported = false; break;     // UNSUPPORTED!!
-            case 0x04: bits_per_pixel = 128; sw = platform_sw; supported = false; break;    // UNSUPPORTED!!
-            case 0x06: bits_per_pixel = 4; break;
-            case 0x07: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
-            case 0x08: bits_per_pixel = 8; break;
-            case 0x09: bits_per_pixel = 32; sw = platform_sw; morton_order = 3; break;
-            case 0x10: bits_per_pixel = 4; supported = false; break;    // UNSUPPORTED!!
-            case 0x12: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
-            case 0x21: bits_per_pixel = 32; break;
-            case 0x3C: bits_per_pixel = 16; supported = false; break;   // UNSUPPORTED!!
-            case 0x3D: bits_per_pixel = 16; supported = false; break;   // UNSUPPORTED!!
-            case 0x45: bits_per_pixel = 24; morton_order = 3; break;
-            case 0x59: bits_per_pixel = 4; break;
-            case 0x5B: bits_per_pixel = 8; break;
-            case 0x5C: bits_per_pixel = 4; break;
-            case 0x5F: bits_per_pixel = 8; break;
-            case 0x60: bits_per_pixel = 4; supported = false; break;    // UNSUPPORTED!!
-            case 0x62: bits_per_pixel = 8; supported = false; break;    // UNSUPPORTED!!
+            case 0x00: bpp = 32; sw = platform_sw; break;
+            case 0x01: bpp = 32; sw = platform_sw; break;
+            case 0x02: bpp = 32; sw = platform_sw; break;
+            case 0x03: bpp = 64; sw = platform_sw; supported = false; break;    // UNSUPPORTED!!
+            case 0x04: bpp = 128; sw = platform_sw; supported = false; break;   // UNSUPPORTED!!
+            case 0x06: bpp = 4; break;
+            case 0x07: bpp = 8; supported = false; break;                       // UNSUPPORTED!!
+            case 0x08: bpp = 8; break;
+            case 0x09: bpp = 32; sw = platform_sw; mo = 3; ts = 8; break;
+            case 0x0A: bpp = 32; sw = platform_sw; mo = 3; ts = 8; supported = false; break; // UNSUPPORTED!!
+            case 0x10: bpp = 4; bpp = 4; mo = -8; wf = 4; hf = 4; break;
+            case 0x12: bpp = 8; supported = false; break;                       // UNSUPPORTED!!
+            case 0x21: bpp = 32; break;
+            case 0x3C: bpp = 16; supported = false; break;                      // UNSUPPORTED!!
+            case 0x3D: bpp = 16; supported = false; break;                      // UNSUPPORTED!!
+            case 0x45: bpp = 24; mo = 3; ts = 8; break;
+            case 0x59: bpp = 4; break;
+            case 0x5B: bpp = 8; break;
+            case 0x5C: bpp = 4; break;
+            case 0x5F: bpp = 8; break;
+            case 0x60: bpp = 4; supported = false; break;                       // UNSUPPORTED!!
+            case 0x62: bpp = 8; mo = 3; ts = 8; wf = 8; hf = 4; break;
             default:
                 fprintf(stderr, "ERROR: Unhandled texture type 0x%02x\n", tex.type);
                 goto out;
             }
 
-            if ((dds_size * 8) % bits_per_pixel != 0) {
-                fprintf(stderr, "ERROR: Texture size should be a multiple of %d bits\n", bits_per_pixel);
+            if ((dds_size * 8) % bpp != 0) {
+                fprintf(stderr, "ERROR: Texture size should be a multiple of %d bits\n", bpp);
                 goto out;
             }
 
@@ -596,14 +594,14 @@ int main_utf8(int argc, char** argv)
             }
 
             if (flip_image || ((hdr.platform == NINTENDO_3DS) && (tex.type == 0x45)))
-                flip(bits_per_pixel, dds_payload, dds_size, dds_header->width);
+                flip(bpp, dds_payload, dds_size, dds_header->width);
+            if (ts != 0)
+                tile(bpp * hf, ts, dds_header->width, dds_payload, dds_size);
+            if (mo != 0)
+                mortonize(bpp * wf * hf, mo, dds_header->width / wf,
+                          dds_header->height / hf, dds_payload, dds_size);
             if (sw != NO_SWIZZLE)
-                swizzle(bits_per_pixel, swizzle_op[sw].in, swizzle_op[sw].out, dds_payload, dds_size);
-            if (morton_order != 0) {
-                assert(morton_order < ARRAYSIZE(notrom));
-                tile(bits_per_pixel, 1 << morton_order, dds_header->width, dds_payload, dds_size);
-                transform(bits_per_pixel, notrom[morton_order], dds_payload, dds_size);
-            }
+                swizzle(bpp, swizzle_op[sw].in, swizzle_op[sw].out, dds_payload, dds_size);
 
             // Write texture
             if (fwrite(dds_payload, 1, dds_size, file) != dds_size) {
@@ -752,38 +750,47 @@ int main_utf8(int argc, char** argv)
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "flags", tex->flags);
-            uint32_t texture_format = default_texture_format, bits_per_pixel;
-            uint16_t morton_order = 0;
+            uint32_t texture_format = default_texture_format;
+            int16_t mo = 0;     // Morton order
+            uint32_t ts = 0;    // Tile size
+            uint32_t bpp = 0;   // Bits per pixel
+            uint32_t wf = 1;    // Width factor (for compressed textures)
+            uint32_t hf = 1;    // Height factor (for compressed textures)
             bool supported = true;
             switch (tex->type) {
-            case 0x00: bits_per_pixel = 32; break;
-            case 0x01: bits_per_pixel = 32; break;
-            case 0x02: bits_per_pixel = 32; break;
-            case 0x03: bits_per_pixel = 64; supported = false; break;       // UNSUPPORTED!!
-            case 0x04: bits_per_pixel = 128; supported = false; break;      // UNSUPPORTED!!
-            case 0x06: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; break;
-            case 0x07: texture_format = DDS_FORMAT_DXT3; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
-            case 0x08: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; break;
-            case 0x09: bits_per_pixel = 32; morton_order = 3; break;
-            case 0x10: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; supported = false; break;  // UNSUPPORTED!!
-            case 0x12: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
-            case 0x21: bits_per_pixel = 32; break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 16; supported = false; break; // UNSUPPORTED!!
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 16; supported = false; break; // UNSUPPORTED!!
-            case 0x45: texture_format = DDS_FORMAT_BGR; bits_per_pixel = 24; morton_order = 3; break;
-            case 0x59: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; break;
-            case 0x5B: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; break;
-            case 0x5C: texture_format = DDS_FORMAT_BC4; bits_per_pixel = 4; break;
+            case 0x00: bpp = 32; break;
+            case 0x01: bpp = 32; break;
+            case 0x02: bpp = 32; break;
+            case 0x03: bpp = 64; supported = false; break;                                  // UNSUPPORTED!!
+            case 0x04: bpp = 128; supported = false; break;                                 // UNSUPPORTED!!
+            case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
+            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; supported = false; break; // UNSUPPORTED!!
+            case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
+            case 0x09: bpp = 32; mo = 3; ts = 8; break;
+            case 0x0A: bpp = 32; mo = 3; ts = 8; supported = false; break;                  // UNSUPPORTED!!
+            case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; mo = -8; wf = 4; hf = 4; break;
+            case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; supported = false; break; // UNSUPPORTED!!
+            case 0x21: bpp = 32; break;
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
+            case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; mo = 3; ts = 8; break;
+            case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
+            case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
+            case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
 //            case 0x5D: texture_format = DDS_FORMAT_BC5; bits_per_pixel = ?; break;
 //            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
-            case 0x5F: texture_format = DDS_FORMAT_BC7; bits_per_pixel = 8; break;
-            case 0x60: texture_format = DDS_FORMAT_DXT1; bits_per_pixel = 4; supported = false; break;  // UNSUPPORTED!!
-            case 0x62: texture_format = DDS_FORMAT_DXT5; bits_per_pixel = 8; supported = false; break;  // UNSUPPORTED!!
+            case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
+            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; supported = false; break;  // UNSUPPORTED!!
+            case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; mo = 3; ts = 8; wf = 8; hf = 4; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 continue;
             }
-            uint32_t highest_mipmap_size = (width * height * bits_per_pixel) / 8;
+            if (mo != 0 && tex->mipmaps != 1) {
+                fprintf(stderr, "ERROR: Swizzled textures with multiple mipmaps are not supported\n");
+                continue;
+            }
+            uint32_t highest_mipmap_size = (width * height * bpp) / 8;
             uint32_t texture_size = highest_mipmap_size;
             for (int j = 0; j < tex->mipmaps - 1; j++)
                 texture_size += highest_mipmap_size / (4 << (j * 2));
@@ -812,7 +819,7 @@ int main_utf8(int argc, char** argv)
                 fclose(dst);
                 continue;
             }
-            if (write_dds_header(dst, texture_format, width, height, bits_per_pixel,
+            if (write_dds_header(dst, texture_format, width, height, bpp,
                                  tex->mipmaps, tex->flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
@@ -837,25 +844,23 @@ int main_utf8(int argc, char** argv)
             // insist on using ARGB always...
             switch (texture_format) {
             case DDS_FORMAT_RGBA:
-                swizzle(bits_per_pixel, "RGBA", "ARGB", &buf[pos], texture_size);
+                swizzle(bpp, "RGBA", "ARGB", &buf[pos], texture_size);
                 break;
             case DDS_FORMAT_ABGR:
-                swizzle(bits_per_pixel, "ABGR", "ARGB", &buf[pos], texture_size);
+                swizzle(bpp, "ABGR", "ARGB", &buf[pos], texture_size);
                 break;
             case DDS_FORMAT_GRAB:
-                swizzle(bits_per_pixel, "GRAB", "ARGB", &buf[pos], texture_size);
+                swizzle(bpp, "GRAB", "ARGB", &buf[pos], texture_size);
                 break;
             default:
                 break;
             }
-            // Additional transformations
-            if (morton_order != 0) {
-                assert(morton_order < ARRAYSIZE(morton));
-                transform(bits_per_pixel, morton[morton_order], &buf[pos], texture_size);
-                untile(bits_per_pixel, 1 << morton_order, width, &buf[pos], texture_size);
-            }
+            if (mo != 0)
+                unmortonize(bpp * wf * hf, mo, width / wf, height / hf, &buf[pos], texture_size);
+            if (ts != 0)
+                untile(bpp * hf, ts, width, &buf[pos], texture_size);
             if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x45)))
-                flip(bits_per_pixel, &buf[pos], texture_size, width);
+                flip(bpp, &buf[pos], texture_size, width);
             if (fwrite(&buf[pos], texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
                 fclose(dst);

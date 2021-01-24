@@ -39,7 +39,7 @@ CFLAGS=-std=c99 -pipe -fvisibility=hidden -Wall -Wextra -Werror -Wno-sequence-po
 ifeq ($(OS),Windows_NT)
 LDFLAGS=-s -municode
 else
-LDFLAGS=-s
+LDFLAGS=-s -lm
 endif
 
 .PHONY: all clean
