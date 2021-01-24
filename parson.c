@@ -51,7 +51,7 @@
 
 #define FLOAT_FORMAT "%1.17g" /* do not increase precision without incresing NUM_BUF_SIZE */
 #if defined(PARSON_FORCE_HEX)
-#if defined(_WIN32)
+#if (defined(_WIN32) && !defined(__GNUC__))
 #define HEX_FORMAT "0x%I64x"
 #else
 #define HEX_FORMAT "0x%llx"
@@ -169,7 +169,7 @@ static char * parson_strndup(const char *string, size_t n) {
         return NULL;
     }
     output_string[n] = '\0';
-    strncpy(output_string, string, n);
+    memcpy(output_string, string, n);
     return output_string;
 }
 
