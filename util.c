@@ -1,6 +1,6 @@
 /*
   Common code for Gust (Koei/Tecmo) PC games tools
-  Copyright © 2019-2020 VitaSmith
+  Copyright © 2019-2021 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -33,7 +33,8 @@ bool create_path(char* path)
         size_t pos = 0;
         for (size_t n = strlen(path); n > 0; n--) {
             if (path[n] == PATH_SEP) {
-                pos = n;
+                while ((n > 0) && (path[--n] == PATH_SEP));
+                pos = n + 1;
                 break;
             }
         }

@@ -1,6 +1,6 @@
 /*
   Common code for Gust (Koei/Tecmo) PC games tools
-  Copyright © 2019-2020 VitaSmith
+  Copyright © 2019-2021 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 #include <crtdbg.h>
 #endif
 
-#if defined(__APPLE__)
+#if !defined(_WIN32)
 #include <libgen.h>
 #endif
 #include <stdbool.h>
@@ -94,6 +94,14 @@ static __inline char* _basename(const char* path, bool remove_extension)
     if ((ext[0] != 0) && !remove_extension)
         strncat(basename, ext, sizeof(basename) - strlen(basename));
     return basename;
+}
+static __inline char* dirname(const char* path)
+{
+    static char dir[PATH_MAX];
+    _splitpath_s(path, NULL, 0, dir, sizeof(dir), NULL, 0, NULL, 0);
+    for (int32_t n = (int32_t)strlen(dir) - 1; (n > 0) && ((dir[n] == '/') || (dir[n] == '\\')); n--)
+        dir[n] = 0;
+    return dir;
 }
 #define basename(path) _basename(path, false)
 #define appname(path) _basename(path, true)
