@@ -1,6 +1,6 @@
 /*
   gust_elixir - Archive unpacker for Gust (Koei/Tecmo) .elixir[.gz] files
-  Copyright © 2019-2020 VitaSmith
+  Copyright © 2019-2021 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -71,12 +71,12 @@ int main_utf8(int argc, char** argv)
     bool list_only = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'l');
 
     if ((argc != 2) && !list_only) {
-        printf("%s %s (c) 2019-2020 VitaSmith\n\n"
+        printf("%s %s (c) 2019-2021 VitaSmith\n\n"
             "Usage: %s [-l] <elixir[.gz]> file>\n\n"
             "Extracts (file) or recreates (directory) a Gust .elixir archive.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
             "is being overwritten for the first time.\n",
-            appname(argv[0]), GUST_TOOLS_VERSION_STR, appname(argv[0]));
+            _appname(argv[0]), GUST_TOOLS_VERSION_STR, _appname(argv[0]));
         return 0;
     }
 
@@ -146,7 +146,7 @@ int main_utf8(int argc, char** argv)
         lxr_entry* entry = table;
         for (uint32_t i = 0; i < hdr.nb_files; i++) {
             entry->offset = ftell(file);
-            snprintf(path, sizeof(path), "%s%c%s", basename(argv[argc - 1]), PATH_SEP,
+            snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP,
                 json_array_get_string(json_files_array, i));
             entry->size = read_file(path, &buf);
             if (entry->size == 0) {
@@ -231,7 +231,7 @@ int main_utf8(int argc, char** argv)
 
         r = 0;
     } else {
-        printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", basename(argv[argc - 1]));
+        printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", _basename(argv[argc - 1]));
         char* elixir_pos = strstr(argv[argc - 1], ".elixir");
         if (elixir_pos == NULL) {
             fprintf(stderr, "ERROR: File should have a '.elixir[.gz]' extension\n");
@@ -334,7 +334,7 @@ int main_utf8(int argc, char** argv)
 
         // Now that we have an uncompressed .elixir file, extract the files
         json = json_value_init_object();
-        json_object_set_string(json_object(json), "name", basename(argv[argc - 1]));
+        json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
         json_object_set_boolean(json_object(json), "compressed", (gz_pos != NULL));
 
         *elixir_pos = 0;

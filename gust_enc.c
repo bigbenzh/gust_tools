@@ -802,7 +802,7 @@ int main_utf8(int argc, char** argv)
     uint32_t src_size, dst_size;
     uint8_t *src = NULL, *dst = NULL;
     int r = -1;
-    const char* app_name = appname(argv[0]);
+    const char* app_name = _appname(argv[0]);
     if ((argc < 2) || ((argc == 3) && (*argv[1] != '-'))) {
         printf("%s %s (c) 2019-2021 VitaSmith\n\nUsage: %s [-GAME_ID] <file>\n\n"
             "Encode or decode a Gust .e file.\n\n"
@@ -889,7 +889,7 @@ int main_utf8(int argc, char** argv)
 
     char* e_pos = strstr(argv[argc - 1], ".e");
     if (e_pos == NULL) {
-        printf("Encoding '%s'...\n", basename(argv[argc - 1]));
+        printf("Encoding '%s'...\n", _basename(argv[argc - 1]));
         // Compress and scramble a file
 #if defined(USE_GLAZED)
         dst = malloc(src_size);
@@ -923,7 +923,7 @@ int main_utf8(int argc, char** argv)
 
         r = 0;
     } else {
-        printf("Decoding '%s'...\n", basename(argv[argc - 1]));
+        printf("Decoding '%s'...\n", _basename(argv[argc - 1]));
         // Decode a file
         if (((src_size % 4) != 0) || (src_size <= E_HEADER_SIZE + E_FOOTER_SIZE)) {
             fprintf(stderr, "ERROR: Invalid file size\n");

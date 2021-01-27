@@ -122,7 +122,7 @@ int main_utf8(int argc, char** argv)
         printf("%s %s (c) 2018-2021 Yuri Hime & VitaSmith\n\n"
             "Usage: %s [-l] <Gust PAK file>\n\n"
             "Extracts (.pak) or recreates (.json) a Gust .pak archive.\n\n",
-            appname(argv[0]), GUST_TOOLS_VERSION_STR, appname(argv[0]));
+            _appname(argv[0]), GUST_TOOLS_VERSION_STR, _appname(argv[0]));
         return 0;
     }
 
@@ -154,7 +154,7 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: A22 extensions can only be used on 64-bit PAKs\n");
             goto out;
         }
-        snprintf(path, sizeof(path), "%s%c%s", dirname(argv[argc - 1]), PATH_SEP, filename);
+        snprintf(path, sizeof(path), "%s%c%s", _dirname(argv[argc - 1]), PATH_SEP, filename);
         printf("Creating '%s'...\n", path);
         create_backup(path);
         file = fopen_utf8(path, "wb+");
@@ -185,7 +185,7 @@ int main_utf8(int argc, char** argv)
             uint8_t* key = string_to_key(json_object_get_string(file_entry, "key"), CURRENT_KEY_SIZE);
             filename = json_object_get_string(file_entry, "name");
             strncpy(entry(i, filename), filename, FILENAME_SIZE - 1);
-            snprintf(path, sizeof(path), "%s%c%s", dirname(argv[argc - 1]), PATH_SEP, filename);
+            snprintf(path, sizeof(path), "%s%c%s", _dirname(argv[argc - 1]), PATH_SEP, filename);
             for (size_t n = 0; n < strlen(path); n++) {
                 if (path[n] == '\\')
                     path[n] = PATH_SEP;
@@ -230,7 +230,7 @@ int main_utf8(int argc, char** argv)
         }
         r = 0;
     } else {
-        printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", basename(argv[argc - 1]));
+        printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", _basename(argv[argc - 1]));
         file = fopen_utf8(argv[argc - 1], "rb");
         if (file == NULL) {
             fprintf(stderr, "ERROR: Can't open PAK file '%s'", argv[argc - 1]);
@@ -284,7 +284,7 @@ int main_utf8(int argc, char** argv)
 
         // Store the data we'll need to reconstruct the archive to a JSON file
         json = json_value_init_object();
-        json_object_set_string(json_object(json), "name", change_extension(basename(argv[argc - 1]), ".pak"));
+        json_object_set_string(json_object(json), "name", change_extension(_basename(argv[argc - 1]), ".pak"));
         json_object_set_number(json_object(json), "version", hdr.version);
         json_object_set_number(json_object(json), "header_size", hdr.header_size);
         json_object_set_number(json_object(json), "flags", hdr.flags);
@@ -321,9 +321,9 @@ int main_utf8(int argc, char** argv)
                 json_object_set_number(json_object(json_file), "extra", (double)getbe32(&entries64_a22[i].extra));
 
             json_array_append_value(json_array(json_files_array), json_file);
-            snprintf(path, sizeof(path), "%s%c%s", dirname(argv[argc - 1]), PATH_SEP, entry(i, filename));
-            if (!create_path(dirname(path))) {
-                fprintf(stderr, "ERROR: Can't create path '%s'\n", dirname(path));
+            snprintf(path, sizeof(path), "%s%c%s", _dirname(argv[argc - 1]), PATH_SEP, entry(i, filename));
+            if (!create_path(_dirname(path))) {
+                fprintf(stderr, "ERROR: Can't create path '%s'\n", _dirname(path));
                 goto out;
             }
             fseek64(file, entry(i, data_offset) + file_data_offset, SEEK_SET);
@@ -346,8 +346,8 @@ int main_utf8(int argc, char** argv)
 
         if (!list_only) {
             json_object_set_value(json_object(json), "files", json_files_array);
-            snprintf(path, sizeof(path), "%s%c%s", dirname(argv[argc - 1]), PATH_SEP,
-                change_extension(basename(argv[argc - 1]), ".json"));
+            snprintf(path, sizeof(path), "%s%c%s", _dirname(argv[argc - 1]), PATH_SEP,
+                change_extension(_basename(argv[argc - 1]), ".json"));
             printf("Creating '%s'\n", path);
             json_serialize_to_file_pretty(json, path);
         }

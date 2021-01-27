@@ -1,6 +1,6 @@
 /*
   gust_ebm - Ebm file processor for Gust (Koei/Tecmo) PC games
-  Copyright © 2019-2020 VitaSmith
+  Copyright © 2019-2021 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -50,10 +50,10 @@ int main_utf8(int argc, char** argv)
     JSON_Value* json = NULL;
 
     if (argc != 2) {
-        printf("%s %s (c) 2019-2020 VitaSmith\n\n"
+        printf("%s %s (c) 2019-2021 VitaSmith\n\n"
             "Usage: %s <file>\n\n"
             "Convert a .ebm file to or from an editable JSON file.\n\n",
-            appname(argv[0]), GUST_TOOLS_VERSION_STR, appname(argv[0]));
+            _appname(argv[0]), GUST_TOOLS_VERSION_STR, _appname(argv[0]));
         return 0;
     }
 
@@ -121,8 +121,8 @@ int main_utf8(int argc, char** argv)
         }
         r = 0;
     } else if (strstr(argv[argc - 1], ".ebm") != NULL) {
-        printf("Converting '%s' to JSON...\n", basename(argv[argc - 1]));
-        uint32_t buf_size = read_file(basename(argv[argc - 1]), &buf);
+        printf("Converting '%s' to JSON...\n", _basename(argv[argc - 1]));
+        uint32_t buf_size = read_file(_basename(argv[argc - 1]), &buf);
         if (buf_size == 0)
             goto out;
         uint32_t nb_messages = getle32(buf);
@@ -133,7 +133,7 @@ int main_utf8(int argc, char** argv)
 
         // Store the data we'll need to reconstruct the archive to a JSON file
         json = json_value_init_object();
-        json_object_set_string(json_object(json), "name", basename(argv[argc - 1]));
+        json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
         json_object_set_number(json_object(json), "nb_messages", nb_messages);
         JSON_Value* json_messages = json_value_init_array();
         uint32_t* ebm_header = (uint32_t*)&buf[sizeof(uint32_t)];

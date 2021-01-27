@@ -363,7 +363,7 @@ int main_utf8(int argc, char** argv)
             "Extracts (file) or recreates (directory) a Gust .g1t texture archive.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
             "is being overwritten for the first time.\n",
-            appname(argv[0]), GUST_TOOLS_VERSION_STR, appname(argv[0]));
+            _appname(argv[0]), GUST_TOOLS_VERSION_STR, _appname(argv[0]));
         return 0;
     }
 
@@ -448,7 +448,7 @@ int main_utf8(int argc, char** argv)
         }
 
         printf("TYPE OFFSET     SIZE       NAME");
-        for (size_t i = 0; i < strlen(basename(argv[argc - 1])); i++)
+        for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
         printf("     DIMENSIONS MIPMAPS SUPPORTED?\n");
         for (uint32_t i = 0; i < hdr.nb_textures; i++) {
@@ -458,7 +458,7 @@ int main_utf8(int argc, char** argv)
             tex.type = json_object_get_uint8(texture_entry, "type");
             tex.flags = json_object_get_uint32(texture_entry, "flags");
             // Read the DDS file
-            snprintf(path, sizeof(path), "%s%c%s", basename(argv[argc - 1]), PATH_SEP,
+            snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
             uint32_t dds_size = read_file(path, &buf);
             if (dds_size <= sizeof(DDS_HEADER)) {
@@ -686,7 +686,7 @@ int main_utf8(int argc, char** argv)
         // Keep the information required to recreate the archive in a JSON file
         json = json_value_init_object();
         json_object_set_number(json_object(json), "json_version", JSON_VERSION);
-        json_object_set_string(json_object(json), "name", basename(argv[argc - 1]));
+        json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
         json_object_set_string(json_object(json), "version", version);
         json_object_set_number(json_object(json), "nb_textures", hdr->nb_textures);
         json_object_set_number(json_object(json), "platform", hdr->platform);
@@ -701,7 +701,7 @@ int main_utf8(int argc, char** argv)
         JSON_Value* json_textures_array = json_value_init_array();
 
         printf("TYPE OFFSET     SIZE       NAME");
-        for (size_t i = 0; i < strlen(basename(argv[argc - 1])); i++)
+        for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
         printf("     DIMENSIONS MIPMAPS SUPPORTED?\n");
         dir = strdup(argv[argc - 1]);
@@ -801,7 +801,7 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "ERROR: Computed texture size is larger than actual size\n");
                 continue;
             }
-            snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, basename(argv[argc - 1]), PATH_SEP, i);
+            snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
             char dims[16];
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex->type, hdr->header_size + x_offset_table[i],
