@@ -3,7 +3,7 @@
     /* Change to false if you don't want to spend time validating that the numbers below are prime */
     "validate_primes": true,
     /* Change to the id of the game you wish to descramble (using one of the ids below) */
-    "seeds_id": "A17",
+    "seeds_id": "A21",
     /* Seeds used by a game executable can be found in its IDA Freeware disassembly:
      * 1. Locate the function call that uses literal value 3B9A73C9h (SEED_CONSTANT).
      *    Note that there may be multiple similar function calls with different seeds, so make sure to pick the right one!
@@ -123,7 +123,7 @@
             ],
             "fence": 0x0ab5
         },
-        {
+        {   // Atelier Ryza (A21) and Atelier Ryza 2 (A22) use the same seeds
             "id": "A21",
             "name": "Atelier Ryza",
             "version": 2,

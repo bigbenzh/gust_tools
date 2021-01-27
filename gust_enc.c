@@ -1,6 +1,6 @@
 /*
   gust_enc - Encoder/Decoder for Gust (Koei/Tecmo) .e files
-  Copyright © 2019-2020 - VitaSmith
+  Copyright © 2019-2021 - VitaSmith
   Prime number computation copyright © 2001-2003 - Stephane Carrez
 
   This program is free software: you can redistribute it and/or modify
@@ -804,7 +804,7 @@ int main_utf8(int argc, char** argv)
     int r = -1;
     const char* app_name = appname(argv[0]);
     if ((argc < 2) || ((argc == 3) && (*argv[1] != '-'))) {
-        printf("%s %s (c) 2019-2020 VitaSmith\n\nUsage: %s [-GAME_ID] <file>\n\n"
+        printf("%s %s (c) 2019-2021 VitaSmith\n\nUsage: %s [-GAME_ID] <file>\n\n"
             "Encode or decode a Gust .e file.\n\n"
             "If GAME_ID is not provided, then the default game ID from '%s.json' is used.\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
