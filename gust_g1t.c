@@ -78,22 +78,8 @@ typedef struct {
 
 #pragma pack(pop)
 
-typedef struct {
-    const char* in;
-    const char* out;
-} swizzle_t;
-
-swizzle_t swizzle_op[] = {
-    { NULL, NULL },
-    { "ARGB", "ABGR" },
-    { "ARGB", "RGBA" },
-    { "ARGB", "GRAB" },
-};
-
-#define NO_SWIZZLE      0
-#define ARGB_TO_ABGR    1
-#define ARGB_TO_RGBA    2
-#define ARGB_TO_GRAB    3
+// Same order as enum DDS_FORMAT
+const char* argb_name[] = { NULL, NULL, "ABGR", "ARGB", "GRAB", "RGBA" };
 
 static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t height,
                                uint32_t bpp, uint32_t mipmaps, uint32_t flags)
@@ -176,8 +162,8 @@ static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t he
     return r;
 }
 
-static void swizzle(const uint32_t bits_per_pixel, const char* in,
-                    const char* out, uint8_t* buf, const uint32_t size)
+static void rgba_convert(const uint32_t bits_per_pixel, const char* in,
+                         const char* out, uint8_t* buf, const uint32_t size)
 {
     assert(bits_per_pixel % 8 == 0);
 
@@ -235,33 +221,28 @@ static __inline uint32_t deflate_bits(uint32_t x)
 }
 
 // From two 32-bit (x,y) coordinates, compute the 64-bit Morton (or Z-order) value.
-// If invert is true, x and y are inverted.
-static __inline uint32_t xy_to_morton(uint32_t x, uint32_t y, bool invert)
+static __inline uint32_t xy_to_morton(uint32_t x, uint32_t y)
 {
-    return (inflate_bits(x) << (invert ? 1 : 0)) |
-           (inflate_bits(y) << (invert ? 0 : 1));
+    return (inflate_bits(x) << 1) | (inflate_bits(y) << 0);
 }
 
 // Fom a 32-bit Morton (Z-order) value, recover two 32-bit (x,y) coordinates.
-// If invert is true, x and y are inverted.
-static __inline void morton_to_xy(uint32_t z, uint32_t* x, uint32_t* y, bool invert)
+static __inline void morton_to_xy(uint32_t z, uint32_t* x, uint32_t* y)
 {
-    *x = deflate_bits(z >> (invert ? 1 : 0));
-    *y = deflate_bits(z >> (invert ? 0 : 1));
+    *x = deflate_bits(z >> 1);
+    *y = deflate_bits(z >> 0);
 }
 
-// Apply (reverse = false) or remove (reverse = true) a Morton transformation
-// a.k.a. a Z-order curve to a texture.
-// The Morton order can be negative, in which case the effective Morton order
-// is the absolute value and the odd/even bit positions for x and y are inverted.
-static void mortonizer(const uint32_t bits_per_element, const int16_t morton_order,
-                       const uint32_t width, const uint32_t height,
-                       uint8_t* buf, const uint32_t size, bool reverse)
+// Apply or reverse a Morton transformation, a.k.a. a Z-order curve, to a texture.
+// If morton_order is negative, a reverse Morton transformation is applied.
+static void mortonize(const uint32_t bits_per_element, const int16_t morton_order,
+                      const uint32_t width, const uint32_t height,
+                      uint8_t* buf, const uint32_t size)
 {
     const uint32_t bytes_per_element = bits_per_element / 8;
-    uint32_t nblocks = size / bytes_per_element;
-    uint16_t k = (int16_t)abs(morton_order);
-    bool invert = (morton_order != (int16_t)k);
+    uint32_t num_elements = size / bytes_per_element;
+    uint16_t k = (uint16_t)abs(morton_order);
+    bool reverse = (morton_order != (int16_t)k);
 
     // Only deal with elements that are multiple of one byte in size
     assert(bits_per_element % 8 == 0);
@@ -269,65 +250,37 @@ static void mortonizer(const uint32_t bits_per_element, const int16_t morton_ord
     assert(bytes_per_element * width * height == size);
     // Only deal with texture that are smaller than 64k*64k
     assert((width < 0x10000) && (height < 0x10000));
-    // Ensure that we won't produce x or y that are larger than width or height
-    assert(k <= log2(min(width, height)));
-    // Help masks to isolate the mortonized and unmortonized part of our source indices
-    uint32_t low_mask = (1 << (2 * k)) - 1;
-    uint32_t high_mask = ~low_mask;
+    // Ensure that width and height are an exact multiple of 2^k
+    assert(width % (1 << k) == 0);
+    assert(height % (1 << k) == 0);
+    // Ensure that we won't produce x or y that are larger than the maximum dimension
+    assert(k <= log2(max(width, height)));
+    uint32_t tile_width = 1 << k;
+    uint32_t tile_size = tile_width * tile_width;
+    uint32_t mask = tile_size - 1;
     uint8_t* tmp_buf = (uint8_t*)malloc(size);
-    for (uint32_t i = 0; i < nblocks; i++) {
-        uint32_t x, y;  // Coordinates in each 2^k by 2^k square
-        // Note that we don't need to mask x or y with (2^k - 1)
-        // since we apply low_mask to the Morton value.
-        uint32_t j = i & high_mask; // Destination index, high part
-        if (!reverse) { // Morton value from an (x,y) pair
-            x = i; y = i >> k;
-            j |= xy_to_morton(x, y, invert) & low_mask;
-        } else {        // (x,y) pair from a Morton value
-            morton_to_xy(i & low_mask, &x, &y, invert);
-            j |= (y << k) | x;
+    for (uint32_t i = 0; i < num_elements; i++) {
+        uint32_t j, x, y;
+        if (reverse) {  // Morton value to an (x,y) pair
+            // Recover (x,y) for the Morton tile
+            morton_to_xy(i & mask, &x, &y);
+            // Now apply untiling by offsetting (x,y) with the tile positiom
+            x += ((i / tile_size) % (width / tile_width)) * tile_width;
+            y += ((i / tile_size) / (width / tile_width)) * tile_width;
+            j = y * width + x;
+        } else {        // Morton value from an (x,y) pair
+            x = i % width; y = i / width;
+            j = xy_to_morton(x, y) & mask;
+            // Now, apply tiling. This is accomplished by offseting our value
+            // with the current tile position multiplied by the tile size.
+            j += ((y / tile_width) * (width / tile_width) + (x / tile_width)) * tile_size;
         }
+        assert(j < num_elements);
         memcpy(&tmp_buf[j * bytes_per_element], &buf[i * bytes_per_element], bytes_per_element);
     }
     memcpy(buf, tmp_buf, size);
     free(tmp_buf);
 }
-
-#define mortonize(bpe, k, w, h, buf, size) mortonizer(bpe, k, w, h, buf, size, false)
-#define unmortonize(bpe, k, w, h, buf, size) mortonizer(bpe, k, w, h, buf, size, true)
-
-// An element can be a pixel (for uncompressed textures) or a group of pixels (for DXT1, DXT5...)
-// A positive tile_size performs tiling. A negative tile_size performs untiling.
-static void tiler(const uint32_t bits_per_element, uint32_t tile_size, uint32_t width,
-                 uint8_t* buf, const uint32_t size, bool untile)
-{
-    assert(bits_per_element % 8 == 0);
-    const uint32_t bytes_per_element = bits_per_element / 8;
-    assert((bytes_per_element >= 1) && (bytes_per_element <= 8));
-    assert(size % bytes_per_element == 0);
-    assert(size % (tile_size * tile_size) == 0);
-
-    uint8_t* tmp_buf = (uint8_t*)malloc(size);
-
-    for (uint32_t i = 0; i < size / bytes_per_element / tile_size / tile_size; i++) {
-        uint32_t tile_row = i / (width / tile_size);
-        uint32_t tile_column = i % (width / tile_size);
-        uint32_t tile_start = tile_row * width * tile_size + tile_column * tile_size;
-        for (uint32_t j = 0; j < tile_size; j++) {
-            uint32_t addr[2];
-            addr[0] = bytes_per_element * (tile_start + j * width);
-            addr[1] = bytes_per_element * (i * tile_size * tile_size + j * tile_size);
-            memcpy(&tmp_buf[addr[untile ? 0 : 1]], &buf[addr[untile ? 1 : 0]],
-                   (size_t)tile_size * bytes_per_element);
-        }
-    }
-
-    memcpy(buf, tmp_buf, size);
-    free(tmp_buf);
-}
-
-#define tile(bpe, ts, w, buf, size) tiler(bpe, ts, w, buf, size, false)
-#define untile(bpe, ts, w, buf, size) tiler(bpe, ts, w, buf, size, true)
 
 static void flip(uint32_t bits_per_pixel, uint8_t* buf, const uint32_t size, uint32_t width)
 {
@@ -518,49 +471,49 @@ int main_utf8(int argc, char** argv)
                 }
             }
 
-            // Set the default swizzle for the platform
-            uint32_t platform_sw;
+            // Set the default ARGB format for the platform
+            uint32_t default_texture_format;
             switch (hdr.platform) {
             case NINTENDO_DS:
             case NINTENDO_3DS:
             case SONY_PS4:
-                platform_sw = ARGB_TO_GRAB;
+                default_texture_format = DDS_FORMAT_GRAB;
                 break;
             case SONY_PSV:
             case NINTENDO_SWITCH:
-                platform_sw = NO_SWIZZLE;    // Already ARGB
+                default_texture_format = DDS_FORMAT_ARGB;
                 break;
             default:    // PC and other platforms
-                platform_sw = ARGB_TO_RGBA;
+                default_texture_format = DDS_FORMAT_RGBA;
                 break;
             }
-            // See other similar section below for more details on these
-            uint32_t bpp = 0, sw = NO_SWIZZLE, wf = 1, hf = 1, ts = 0;
-            int16_t mo = 0;
-            bool supported = true;
+            uint32_t bpp = 0, texture_format = default_texture_format;
+            bool supported = true, swizzled = false;
             switch (tex.type) {
-            case 0x00: bpp = 32; sw = platform_sw; break;
-            case 0x01: bpp = 32; sw = platform_sw; break;
-            case 0x02: bpp = 32; sw = platform_sw; break;
-            case 0x03: bpp = 64; sw = platform_sw; supported = false; break;    // UNSUPPORTED!!
-            case 0x04: bpp = 128; sw = platform_sw; supported = false; break;   // UNSUPPORTED!!
-            case 0x06: bpp = 4; break;
-            case 0x07: bpp = 8; supported = false; break;                       // UNSUPPORTED!!
-            case 0x08: bpp = 8; break;
-            case 0x09: bpp = 32; sw = platform_sw; mo = 3; ts = 8; break;
-            case 0x0A: bpp = 32; sw = platform_sw; mo = 3; ts = 8; supported = false; break; // UNSUPPORTED!!
-            case 0x10: bpp = 4; bpp = 4; mo = -8; wf = 4; hf = 4; break;
-            case 0x12: bpp = 8; supported = false; break;                       // UNSUPPORTED!!
+            case 0x00: bpp = 32; break;
+            case 0x01: bpp = 32; break;
+            case 0x02: bpp = 32; break;
+            case 0x03: bpp = 64; supported = false; break;                                  // UNSUPPORTED!!
+            case 0x04: bpp = 128; supported = false; break;                                 // UNSUPPORTED!!
+            case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
+            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; supported = false; break; // UNSUPPORTED!!
+            case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
+            case 0x09: bpp = 32; swizzled = true; break;
+            case 0x0A: bpp = 32; swizzled = true; supported = false; break;                 // UNSUPPORTED!!
+            case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
+            case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             case 0x21: bpp = 32; break;
-            case 0x3C: bpp = 16; supported = false; break;                      // UNSUPPORTED!!
-            case 0x3D: bpp = 16; supported = false; break;                      // UNSUPPORTED!!
-            case 0x45: bpp = 24; mo = 3; ts = 8; break;
-            case 0x59: bpp = 4; break;
-            case 0x5B: bpp = 8; break;
-            case 0x5C: bpp = 4; break;
-            case 0x5F: bpp = 8; break;
-            case 0x60: bpp = 4; supported = false; break;                       // UNSUPPORTED!!
-            case 0x62: bpp = 8; mo = 3; ts = 8; wf = 8; hf = 4; break;
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
+            case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; swizzled = true; break;
+            case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
+            case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
+            case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
+//            case 0x5D: texture_format = DDS_FORMAT_BC5; bits_per_pixel = ?; break;
+//            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
+            case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
+            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; supported = false; break;  // UNSUPPORTED!!
+            case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             default:
                 fprintf(stderr, "ERROR: Unhandled texture type 0x%02x\n", tex.type);
                 goto out;
@@ -593,15 +546,31 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
 
-            if (flip_image || ((hdr.platform == NINTENDO_3DS) && (tex.type == 0x45)))
+            if (flip_image || ((hdr.platform == NINTENDO_3DS) && (tex.type == 0x09 || tex.type == 0x45)))
                 flip(bpp, dds_payload, dds_size, dds_header->width);
-            if (ts != 0)
-                tile(bpp * hf, ts, dds_header->width, dds_payload, dds_size);
-            if (mo != 0)
-                mortonize(bpp * wf * hf, mo, dds_header->width / wf,
-                          dds_header->height / hf, dds_payload, dds_size);
-            if (sw != NO_SWIZZLE)
-                swizzle(bpp, swizzle_op[sw].in, swizzle_op[sw].out, dds_payload, dds_size);
+
+            if (swizzled) {
+                int16_t mo = 0;             // Morton order
+                uint32_t wf = 1, hf = 1;    // Width and height factors
+                if ((texture_format == DDS_FORMAT_DXT1) || (texture_format == DDS_FORMAT_DXT5)) {
+                    wf = 4;
+                    hf = 4;
+                }
+                switch (hdr.platform) {
+                case SONY_PS4:
+                case NINTENDO_3DS:
+                    mo = 3;
+                    wf *= 2;
+                    break;
+                default:
+                    mo = (int16_t)log2(min(dds_header->width / wf, dds_header->height / hf));
+                    break;
+                }
+                mortonize(bpp * wf * hf, mo, dds_header->width / wf, dds_header->height / hf,
+                    dds_payload, dds_size);
+            }
+            if (texture_format >= DDS_FORMAT_ABGR && texture_format <= DDS_FORMAT_RGBA)
+                rgba_convert(bpp, "ARGB", argb_name[texture_format], dds_payload, dds_size);
 
             // Write texture
             if (fwrite(dds_payload, 1, dds_size, file) != dds_size) {
@@ -751,12 +720,8 @@ int main_utf8(int argc, char** argv)
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "flags", tex->flags);
             uint32_t texture_format = default_texture_format;
-            int16_t mo = 0;     // Morton order
-            uint32_t ts = 0;    // Tile size
             uint32_t bpp = 0;   // Bits per pixel
-            uint32_t wf = 1;    // Width factor (for compressed textures)
-            uint32_t hf = 1;    // Height factor (for compressed textures)
-            bool supported = true;
+            bool supported = true, swizzled = false;
             switch (tex->type) {
             case 0x00: bpp = 32; break;
             case 0x01: bpp = 32; break;
@@ -766,14 +731,14 @@ int main_utf8(int argc, char** argv)
             case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
             case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; supported = false; break; // UNSUPPORTED!!
             case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
-            case 0x09: bpp = 32; mo = 3; ts = 8; break;
-            case 0x0A: bpp = 32; mo = 3; ts = 8; supported = false; break;                  // UNSUPPORTED!!
-            case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; mo = -8; wf = 4; hf = 4; break;
-            case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; supported = false; break; // UNSUPPORTED!!
+            case 0x09: bpp = 32; swizzled = true; break;
+            case 0x0A: bpp = 32; swizzled = true; supported = false; break;                 // UNSUPPORTED!!
+            case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
+            case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             case 0x21: bpp = 32; break;
             case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
             case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
-            case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; mo = 3; ts = 8; break;
+            case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; swizzled = true; break;
             case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
             case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
             case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
@@ -781,12 +746,12 @@ int main_utf8(int argc, char** argv)
 //            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
             case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
             case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; supported = false; break;  // UNSUPPORTED!!
-            case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; mo = 3; ts = 8; wf = 8; hf = 4; break;
+            case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 continue;
             }
-            if (mo != 0 && tex->mipmaps != 1) {
+            if (swizzled && tex->mipmaps != 1) {
                 fprintf(stderr, "ERROR: Swizzled textures with multiple mipmaps are not supported\n");
                 continue;
             }
@@ -838,28 +803,44 @@ int main_utf8(int argc, char** argv)
                 }
                 pos += extra_size;
             }
-            // Non ARGB textures require swizzling to be applied, since
+            // Non ARGB textures require conversion to be applied, since
             // tools like Visual Studio or PhotoShop can't be bothered
-            // to honour the swizzling from the DDS header and instead
+            // to honour the pixel format from the DDS header and instead
             // insist on using ARGB always...
+            uint32_t wf = 1, hf = 1;    // Width and height factor
             switch (texture_format) {
             case DDS_FORMAT_RGBA:
-                swizzle(bpp, "RGBA", "ARGB", &buf[pos], texture_size);
+                rgba_convert(bpp, "RGBA", "ARGB", &buf[pos], texture_size);
                 break;
             case DDS_FORMAT_ABGR:
-                swizzle(bpp, "ABGR", "ARGB", &buf[pos], texture_size);
+                rgba_convert(bpp, "ABGR", "ARGB", &buf[pos], texture_size);
                 break;
             case DDS_FORMAT_GRAB:
-                swizzle(bpp, "GRAB", "ARGB", &buf[pos], texture_size);
+                rgba_convert(bpp, "GRAB", "ARGB", &buf[pos], texture_size);
+                break;
+            case DDS_FORMAT_DXT1:
+            case DDS_FORMAT_DXT5:
+                wf = 4; // (hdr->platform == SONY_PS4) ? 8 : 4;
+                hf = 4;
                 break;
             default:
                 break;
             }
-            if (mo != 0)
-                unmortonize(bpp * wf * hf, mo, width / wf, height / hf, &buf[pos], texture_size);
-            if (ts != 0)
-                untile(bpp * hf, ts, width, &buf[pos], texture_size);
-            if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x45)))
+            int16_t mo;     // Morton order
+            if (swizzled) {
+                switch (hdr->platform) {
+                case SONY_PS4:
+                case NINTENDO_3DS:
+                    wf *= 2;
+                    mo = -3;
+                    break;
+                default:
+                    mo = -1 * (int16_t)log2(min(height / hf, width / wf));
+                    break;
+                }
+                mortonize(bpp * wf * hf, mo, width / wf, height / hf, &buf[pos], texture_size);
+            }
+            if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x09 || tex->type == 0x45)))
                 flip(bpp, &buf[pos], texture_size, width);
             if (fwrite(&buf[pos], texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
