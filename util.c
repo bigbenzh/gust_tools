@@ -28,6 +28,11 @@ bool create_path(char* path)
 {
     bool result = true;
     struct stat64_t st;
+#if defined(_WIN32)
+    // Ignore Windows drive names
+    if ((strlen(path) == 2) && (path[1] == ':'))
+        return true;
+#endif
     if (stat64_utf8(path, &st) != 0) {
         // Directory doesn't exist, create it
         size_t pos = 0;
@@ -61,6 +66,71 @@ bool create_path(char* path)
 
     return result;
 }
+
+// dirname/basename, that *PRESERVE* the string parameter.
+// Note that these calls are not concurrent, meaning that you MUST be done
+// using the returned string from a previous call before invoking again.
+#if defined(_WIN32)
+char* _basename_win32(const char* path, bool remove_extension)
+{
+    static char basename[128];
+    static char ext[64];
+    ext[0] = 0;
+    _splitpath_s(path, NULL, 0, NULL, 0, basename, sizeof(basename), ext, sizeof(ext));
+    if ((ext[0] != 0) && !remove_extension)
+        strncat(basename, ext, sizeof(basename) - strlen(basename));
+    return basename;
+}
+
+// This call should behave pretty similar to UNIX' dirname
+char* _dirname_win32(const char* path)
+{
+    static char dir[PATH_MAX];
+    static char drive[4];
+    int found_sep = 0;
+    memset(drive, 0, sizeof(drive));
+    _splitpath_s(path, drive, sizeof(drive), dir, sizeof(dir) - 3, NULL, 0, NULL, 0);
+    // Only deal with drives that are one letter
+    drive[2] = 0;
+    drive[3] = 0;
+    if (drive[1] != ':')
+        drive[0] = 0;
+    // Removing trailing path separators
+    for (int32_t n = (int32_t)strlen(dir) - 1; (n > 0) && ((dir[n] == '/') || (dir[n] == '\\')); n--) {
+        dir[n] = 0;
+        found_sep++;
+    }
+    if (dir[0] == 0) {
+        if (drive[0] == 0)
+            return found_sep ? "\\" : ".";
+        drive[2] = '\\';
+        return drive;
+    }
+    if (drive[0] != 0) {
+        // Add the drive
+        memmove(&dir[2], dir, strlen(dir) + 1);
+        memcpy(dir, drive, strlen(drive));
+        dir[2] = '\\';
+    }
+    return dir;
+}
+#else
+char* _basename_unix(const char* path)
+{
+    static char path_copy[PATH_MAX];
+    strncpy(path_copy, path, sizeof(path_copy));
+    path_copy[PATH_MAX - 1] = 0;
+    return basename(path_copy);
+}
+
+char* _dirname_unix(const char* path)
+{
+    static char path_copy[PATH_MAX];
+    strncpy(path_copy, path, sizeof(path_copy));
+    path_copy[PATH_MAX - 1] = 0;
+    return dirname(path_copy);
+}
+#endif
 
 bool is_file(const char* path)
 {

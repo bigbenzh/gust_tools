@@ -85,42 +85,14 @@
 #endif
 
 #if defined(_WIN32)
-static __inline char* _basename_win32(const char* path, bool remove_extension)
-{
-    static char basename[128];
-    static char ext[64];
-    ext[0] = 0;
-    _splitpath_s(path, NULL, 0, NULL, 0, basename, sizeof(basename), ext, sizeof(ext));
-    if ((ext[0] != 0) && !remove_extension)
-        strncat(basename, ext, sizeof(basename) - strlen(basename));
-    return basename;
-}
-static __inline char* _dirname_win32(const char* path)
-{
-    static char dir[PATH_MAX];
-    _splitpath_s(path, NULL, 0, dir, sizeof(dir), NULL, 0, NULL, 0);
-    for (int32_t n = (int32_t)strlen(dir) - 1; (n > 0) && ((dir[n] == '/') || (dir[n] == '\\')); n--)
-        dir[n] = 0;
-    return dir;
-}
+char* _basename_win32(const char* path, bool remove_extension);
+char* _dirname_win32(const char* path);
 #define _basename(path) _basename_win32(path, false)
 #define _appname(path) _basename_win32(path, true)
 #define _dirname(path) _dirname_win32(path)
 #else
-static __inline char* _basename_unix(const char* path)
-{
-    static char path_copy[PATH_MAX];
-    strncpy(path_copy, path, sizeof(path_copy));
-    path_copy[PATH_MAX - 1] = 0;
-    return basename(path_copy);
-}
-static __inline char* _dirname_unix(const char* path)
-{
-    static char path_copy[PATH_MAX];
-    strncpy(path_copy, path, sizeof(path_copy));
-    path_copy[PATH_MAX - 1] = 0;
-    return dirname(path_copy);
-}
+char* _basename_unix(const char* path);
+char* _dirname_unix(const char* path);
 #define _basename(path) _basename_unix(path)
 #define _appname(path) _basename_unix(path)
 #define _dirname(path) _dirname_unix(path)
