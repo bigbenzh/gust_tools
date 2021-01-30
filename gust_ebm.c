@@ -39,6 +39,7 @@
     uint32_t unknown2;      // ???
     uint32_t msg_length;    // length of msg_string
     char     msg_string[0]; // text message to display
+    uint32_t padding;       // [OPTIONAL] Padding (0x00000000 or 0xffffffff)
  */
 
 int main_utf8(int argc, char** argv)
@@ -74,19 +75,19 @@ int main_utf8(int argc, char** argv)
         uint32_t header_size = json_object_get_uint32(json_object(json), "header_size");
         if (header_size == 0)
             header_size = 9;
-        uint32_t nb_messages = json_object_get_uint32(json_object(json), "nb_messages");
-        if (fwrite(&nb_messages, sizeof(uint32_t), 1, file) != 1) {
+        int32_t nb_messages = (int32_t)json_object_get_uint32(json_object(json), "nb_messages");
+        if (fwrite(&nb_messages, sizeof(int32_t), 1, file) != 1) {
             fprintf(stderr, "ERROR: Can't write number of messages\n");
             goto out;
         }
         JSON_Array* json_messages = json_object_get_array(json_object(json), "messages");
-        if (json_array_get_count(json_messages) != nb_messages) {
+        if (json_array_get_count(json_messages) != abs(nb_messages)) {
             fprintf(stderr, "ERROR: Number of messages doesn't match the array size\n");
             goto out;
         }
         uint32_t ebm_header[11];
         uint32_t padding = 0;
-        for (uint32_t i = 0; i < nb_messages; i++) {
+        for (int i = 0; i < abs(nb_messages); i++) {
             JSON_Object* json_message = json_array_get_object(json_messages, i);
             memset(ebm_header, 0, sizeof(ebm_header));
             uint32_t j = 0;
@@ -125,8 +126,8 @@ int main_utf8(int argc, char** argv)
         uint32_t buf_size = read_file(_basename(argv[argc - 1]), &buf);
         if (buf_size == 0)
             goto out;
-        uint32_t nb_messages = getle32(buf);
-        if (buf_size < sizeof(uint32_t) + nb_messages * sizeof(ebm_message)) {
+        int32_t nb_messages = (int32_t)getle32(buf);
+        if (buf_size < sizeof(uint32_t) + abs(nb_messages) * sizeof(ebm_message)) {
             fprintf(stderr, "ERROR: Invalid number of entries\n");
             goto out;
         }
@@ -134,16 +135,16 @@ int main_utf8(int argc, char** argv)
         // Store the data we'll need to reconstruct the archive to a JSON file
         json = json_value_init_object();
         json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
-        json_object_set_number(json_object(json), "nb_messages", nb_messages);
+        json_object_set_number(json_object(json), "nb_messages", nb_messages & 0xffffffff);
         JSON_Value* json_messages = json_value_init_array();
         uint32_t* ebm_header = (uint32_t*)&buf[sizeof(uint32_t)];
         uint32_t header_size = 0;
-        for (uint32_t i = 0; i < nb_messages; i++) {
+        for (int i = 0; i < abs(nb_messages); i++) {
             uint32_t j = 0;
             JSON_Value* json_message = json_value_init_object();
             json_object_set_number(json_object(json_message), "type", (double)ebm_header[j]);
             if (ebm_header[j] > 0x10)
-                fprintf(stderr, "WARNING: Unexpected header type %d\n", ebm_header[j]);
+                fprintf(stderr, "WARNING: Unexpected header type 0x%08x\n", ebm_header[j]);
             json_object_set_number(json_object(json_message), "voice_id", (double)ebm_header[++j]);
             if (ebm_header[++j] != 0)
                 json_object_set_number(json_object(json_message), "unknown1", (double)ebm_header[j]);
@@ -170,7 +171,7 @@ int main_utf8(int argc, char** argv)
             json_object_set_number(json_object(json_message), "msg_id", (double)ebm_header[j]);
             if (ebm_header[++j] != 0)
                 json_object_set_number(json_object(json_message), "unknown2", (double)ebm_header[j]);
-            // Don't store msg_length since we'll reconstruct it
+            // Don't store str_length since we'll reconstruct it
             uint32_t str_length = ebm_header[++j];
             assert(str_length < 0x10000);
             char* ptr = (char*)&ebm_header[header_size];
@@ -178,7 +179,7 @@ int main_utf8(int argc, char** argv)
             json_array_append_value(json_array(json_messages), json_message);
             ebm_header = (uint32_t*) &ptr[str_length];
             // Some ebm's (e.g. NOA2) have 32-bit padding after the string
-            if (*ebm_header == 0) {
+            if ((*ebm_header == 0) || (*ebm_header == 0xffffffff)) {
                 json_object_set_boolean(json_object(json_message), "padding", true);
                 ebm_header = &ebm_header[1];
             }
