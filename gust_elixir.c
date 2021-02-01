@@ -144,19 +144,23 @@ int main_utf8(int argc, char** argv)
         }
         printf("OFFSET   SIZE     NAME\n");
         lxr_entry* entry = table;
+        const char* entry_name;
         for (uint32_t i = 0; i < hdr.nb_files; i++) {
+            entry->size = 0;
             entry->offset = ftell(file);
-            snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP,
-                json_array_get_string(json_files_array, i));
-            entry->size = read_file(path, &buf);
-            if (entry->size == 0) {
-                free(table);
-                goto out;
+            entry_name = json_array_get_string(json_files_array, i);
+            snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP, entry_name);
+            if (strcmp(entry_name, "dummy") != 0) {
+                entry->size = read_file(path, &buf);
+                if (entry->size == 0) {
+                    free(table);
+                    goto out;
+                }
             }
             strncpy(entry->filename, json_array_get_string(json_files_array, i),
                 0x20 + ((size_t)hdr.filename_size << 4));
             printf("%08x %08x %s\n", entry->offset, entry->size, path);
-            if (fwrite(buf, 1, entry->size, file) != entry->size) {
+            if ((entry->size != 0) && (fwrite(buf, 1, entry->size, file) != entry->size)) {
                 fprintf(stderr, "ERROR: Can't add file data\n");
                 free(table);
                 goto out;
@@ -369,13 +373,13 @@ int main_utf8(int argc, char** argv)
         for (uint32_t i = 0; i < hdr->nb_files; i++) {
             lxr_entry* entry = (lxr_entry*)&buf[sizeof(lxr_header) + (size_t)i * lxr_entry_size];
             assert(entry->offset + entry->size <= (uint32_t)file_size);
-            // Ignore "dummy" entries
-            if ((entry->size == 0) && (strcmp(entry->filename, "dummy") == 0))
-                continue;
             json_array_append_string(json_array(json_files_array), entry->filename);
             snprintf(path, sizeof(path), "%s%c%s", argv[argc - 1], PATH_SEP, entry->filename);
             printf("%08x %08x %s\n", entry->offset, entry->size, path);
             if (list_only)
+                continue;
+            // No need to extract data for dummy entries
+            if ((entry->size == 0) && (strcmp(entry->filename, "dummy") == 0))
                 continue;
             if (!write_file(&buf[entry->offset], entry->size, path, false))
                 goto out;
