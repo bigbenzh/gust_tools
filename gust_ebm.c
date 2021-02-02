@@ -39,7 +39,7 @@
     uint32_t unknown2;      // ???
     uint32_t msg_length;    // length of msg_string
     char     msg_string[0]; // text message to display
-    uint32_t padding;       // [OPTIONAL] Padding (0x00000000 or 0xffffffff)
+    uint32_t extensions;    // [OPTIONAL] NOA2/Ryza2 extensions
  */
 
 int main_utf8(int argc, char** argv)
@@ -72,6 +72,7 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Cannot create file '%s'\n", filename);
             goto out;
         }
+        bool noa2_extensions = json_object_get_boolean(json_object(json), "noa2_extensions");
         uint32_t header_size = json_object_get_uint32(json_object(json), "header_size");
         if (header_size == 0)
             header_size = 9;
@@ -86,7 +87,7 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
         uint32_t ebm_header[11];
-        uint32_t padding = 0;
+        uint32_t extensions = 0;
         for (int i = 0; i < abs(nb_messages); i++) {
             JSON_Object* json_message = json_array_get_object(json_messages, i);
             memset(ebm_header, 0, sizeof(ebm_header));
@@ -113,15 +114,18 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "ERROR: Can't write message data\n");
                 goto out;
             }
-            if (json_object_get_boolean(json_message, "padding")) {
-                if (fwrite(&padding, sizeof(padding), 1, file) != 1) {
-                    fprintf(stderr, "ERROR: Can't write padding\n");
+            if (noa2_extensions || json_object_get_boolean(json_message, "padding")) {
+                if (noa2_extensions)
+                    extensions = json_object_get_uint32(json_message, "extensions");
+                if (fwrite(&extensions, sizeof(extensions), 1, file) != 1) {
+                    fprintf(stderr, "ERROR: Can't write extensions field\n");
                     goto out;
                 }
             }
         }
         r = 0;
     } else if (strstr(argv[argc - 1], ".ebm") != NULL) {
+        int noa2_extensions = 0;
         printf("Converting '%s' to JSON...\n", _basename(argv[argc - 1]));
         uint32_t buf_size = read_file(_basename(argv[argc - 1]), &buf);
         if (buf_size == 0)
@@ -131,20 +135,33 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Invalid number of entries\n");
             goto out;
         }
+        JSON_Value* json_messages = NULL;
+        JSON_Value* json_message = NULL;
 
+retry:
+        if (noa2_extensions) {
+            printf("Detected NOA 2/Ryza 2 ebm extensions...");
+            json_value_free(json_message);
+            json_value_free(json_messages);
+            json_value_free(json);
+        }
         // Store the data we'll need to reconstruct the archive to a JSON file
         json = json_value_init_object();
         json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
         json_object_set_number(json_object(json), "nb_messages", nb_messages & 0xffffffff);
-        JSON_Value* json_messages = json_value_init_array();
+        json_messages = json_value_init_array();
         uint32_t* ebm_header = (uint32_t*)&buf[sizeof(uint32_t)];
         uint32_t header_size = 0;
         for (int i = 0; i < abs(nb_messages); i++) {
             uint32_t j = 0;
-            JSON_Value* json_message = json_value_init_object();
+            json_message = json_value_init_object();
             json_object_set_number(json_object(json_message), "type", (double)ebm_header[j]);
-            if (ebm_header[j] > 0x10)
-                fprintf(stderr, "WARNING: Unexpected header type 0x%08x\n", ebm_header[j]);
+            if (ebm_header[j] > 0x10) {
+                if (noa2_extensions++)
+                    fprintf(stderr, "WARNING: Unexpected header type 0x%08x\n", ebm_header[j]);
+                else
+                    goto retry;
+            }
             json_object_set_number(json_object(json_message), "voice_id", (double)ebm_header[++j]);
             if (ebm_header[++j] != 0)
                 json_object_set_number(json_object(json_message), "unknown1", (double)ebm_header[j]);
@@ -158,6 +175,7 @@ int main_utf8(int argc, char** argv)
                     header_size = 11;
                 } else if (header_size != 11) {
                     fprintf(stderr, "ERROR: Unexpected header size (Got %d, expected 11)\n", header_size);
+                    if (noa2_extensions++ == 0) goto retry;
                     goto out;
                 }
             } else {
@@ -165,6 +183,7 @@ int main_utf8(int argc, char** argv)
                     header_size = 9;
                 } else if (header_size != 9) {
                     fprintf(stderr, "ERROR: Unexpected header size (Got %d, expected 9)\n", header_size);
+                    if (noa2_extensions++ == 0) goto retry;
                     goto out;
                 }
             }
@@ -173,17 +192,24 @@ int main_utf8(int argc, char** argv)
                 json_object_set_number(json_object(json_message), "unknown2", (double)ebm_header[j]);
             // Don't store str_length since we'll reconstruct it
             uint32_t str_length = ebm_header[++j];
-            assert(str_length < 0x10000);
+            if (str_length > 2048) {
+                fprintf(stderr, "ERROR: Unexpected string size\n");
+                if (noa2_extensions++ == 0) goto retry;
+                goto out;
+            }
             char* ptr = (char*)&ebm_header[header_size];
             json_object_set_string(json_object(json_message), "msg_string", ptr);
-            json_array_append_value(json_array(json_messages), json_message);
             ebm_header = (uint32_t*) &ptr[str_length];
-            // Some ebm's (e.g. NOA2) have 32-bit padding after the string
-            if ((*ebm_header == 0) || (*ebm_header == 0xffffffff)) {
-                json_object_set_boolean(json_object(json_message), "padding", true);
+            // Some ebm's (e.g. NOA2, Ryza 2) have a 32-bit extension field after the string
+            if (noa2_extensions) {
+                json_object_set_number(json_object(json_message), "extensions", (double)*ebm_header);
                 ebm_header = &ebm_header[1];
             }
+            json_array_append_value(json_array(json_messages), json_message);
+            json_message = NULL;
         }
+        if (noa2_extensions)
+            json_object_set_boolean(json_object(json), "noa2_extensions", noa2_extensions);
         json_object_set_number(json_object(json), "header_size", header_size);
         json_object_set_value(json_object(json), "messages", json_messages);
         json_serialize_to_file_pretty(json, change_extension(argv[argc - 1], ".json"));
