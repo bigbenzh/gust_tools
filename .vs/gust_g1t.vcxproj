@@ -26,6 +26,7 @@
   <ItemGroup>
     <ClInclude Include="..\dds.h" />
     <ClInclude Include="..\parson.h" />
+    <ClInclude Include="..\utf8.h" />
     <ClInclude Include="..\util.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

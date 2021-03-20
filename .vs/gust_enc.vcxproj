@@ -25,6 +25,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\parson.h" />
+    <ClInclude Include="..\utf8.h" />
     <ClInclude Include="..\util.h" />
   </ItemGroup>
   <ItemGroup>

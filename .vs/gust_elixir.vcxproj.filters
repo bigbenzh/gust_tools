@@ -43,5 +43,8 @@
     <ClInclude Include="..\miniz_tdef.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\utf8.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -30,6 +30,7 @@
     <ClInclude Include="..\miniz_tdef.h" />
     <ClInclude Include="..\miniz_tinfl.h" />
     <ClInclude Include="..\parson.h" />
+    <ClInclude Include="..\utf8.h" />
     <ClInclude Include="..\util.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">

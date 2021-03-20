@@ -50,7 +50,7 @@
 #if !defined(S_ISREG)
 #define S_ISREG(ST_MODE) (((ST_MODE) & _S_IFMT) == _S_IFREG)
 #endif
-#define CREATE_DIR(path) CreateDirectoryA(path, NULL)
+#define CREATE_DIR(path) CreateDirectory_utf8(path, NULL)
 #define PATH_SEP '\\'
 #else
 #if defined(__APPLE__)
