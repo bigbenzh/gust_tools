@@ -191,10 +191,8 @@ int main_utf8(int argc, char** argv)
                     path[n] = PATH_SEP;
             }
             set_entry(i, size, read_file(path, &buf));
-            if (entry(i, size) == 0) {
-                fprintf(stderr, "ERROR: Can't read from '%s'\n", path);
+            if (entry(i, size) == UINT32_MAX)
                 goto out;
-            }
             bool skip_encode = true;
             for (int j = 0; j < CURRENT_KEY_SIZE; j++) {
                 entry(i, key)[j] = key[j];

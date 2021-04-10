@@ -128,7 +128,7 @@ int main_utf8(int argc, char** argv)
         int noa2_extensions = 0;
         printf("Converting '%s' to JSON...\n", _basename(argv[argc - 1]));
         uint32_t buf_size = read_file(_basename(argv[argc - 1]), &buf);
-        if (buf_size == 0)
+        if (buf_size == UINT32_MAX)
             goto out;
         int32_t nb_messages = (int32_t)getle32(buf);
         if (buf_size < sizeof(uint32_t) + abs(nb_messages) * sizeof(ebm_message)) {

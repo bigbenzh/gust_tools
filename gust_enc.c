@@ -884,7 +884,7 @@ int main_utf8(int argc, char** argv)
 
     // Read the source file
     src_size = read_file(argv[argc - 1], &src);
-    if (src_size == 0)
+    if (src_size == UINT32_MAX)
         goto out;
 
     char* e_pos = strstr(argv[argc - 1], ".e");

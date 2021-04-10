@@ -152,7 +152,7 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP, entry_name);
             if (strcmp(entry_name, "dummy") != 0) {
                 entry->size = read_file(path, &buf);
-                if (entry->size == 0) {
+                if (entry->size == UINT32_MAX) {
                     free(table);
                     goto out;
                 }

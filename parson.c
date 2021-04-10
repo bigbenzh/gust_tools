@@ -1348,7 +1348,7 @@ double json_value_get_number(const JSON_Value *value) {
 }
 
 int json_value_get_boolean(const JSON_Value *value) {
-    return json_value_get_type(value) == JSONBoolean ? value->value.boolean : -1;
+    return json_value_get_type(value) == JSONBoolean ? value->value.boolean : 0;
 }
 
 JSON_Value * json_value_get_parent (const JSON_Value *value) {

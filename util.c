@@ -170,7 +170,7 @@ uint32_t read_file_max(const char* path, uint8_t** buf, uint32_t max_size)
     FILE* file = fopen_utf8(path, "rb");
     if (file == NULL) {
         fprintf(stderr, "ERROR: Can't open '%s'\n", path);
-        return 0;
+        return UINT32_MAX;
     }
 
     fseek(file, 0L, SEEK_END);
@@ -181,16 +181,16 @@ uint32_t read_file_max(const char* path, uint8_t** buf, uint32_t max_size)
 
     *buf = calloc(size, 1);
     if (*buf == NULL) {
-        size = 0;
+        size = UINT32_MAX;
         goto out;
     }
     if (fread(*buf, 1, size, file) != size) {
         fprintf(stderr, "ERROR: Can't read '%s'\n", path);
-        size = 0;
+        size = UINT32_MAX;
     }
 out:
     fclose(file);
-    if (size == 0) {
+    if (size == UINT32_MAX) {
         free(*buf);
         *buf = NULL;
     }
@@ -202,7 +202,7 @@ uint64_t get_file_size(const char* path)
     FILE* file = fopen_utf8(path, "rb");
     if (file == NULL) {
         fprintf(stderr, "ERROR: Can't open '%s'\n", path);
-        return 0;
+        return UINT32_MAX;
     }
 
     fseek(file, 0L, SEEK_END);

@@ -414,6 +414,8 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
             uint32_t dds_size = read_file(path, &buf);
+            if (dds_size == UINT32_MAX)
+                goto out;
             if (dds_size <= sizeof(DDS_HEADER)) {
                 fprintf(stderr, "ERROR: '%s' is too small\n", path);
                 goto out;
