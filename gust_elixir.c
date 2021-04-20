@@ -59,6 +59,23 @@ typedef struct {
 } lxr_entry;
 #pragma pack(pop)
 
+int32_t decompress_mem_to_mem(void* pOut_buf, size_t out_buf_len, const void* pSrc_buf, size_t src_buf_len, int flags)
+{
+    tinfl_decompressor decomp;
+    tinfl_status status;
+    tinfl_init(&decomp);
+    status = tinfl_decompress(&decomp, (const mz_uint8*)pSrc_buf, &src_buf_len, (mz_uint8*)pOut_buf,
+        (mz_uint8*)pOut_buf, &out_buf_len, (flags & ~TINFL_FLAG_HAS_MORE_INPUT) | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+    switch (status) {
+    case TINFL_STATUS_DONE:
+        return (int32_t)out_buf_len;
+    case TINFL_STATUS_HAS_MORE_OUTPUT:
+        return -2;
+    default:
+        return -1;
+    }
+}
+
 int main_utf8(int argc, char** argv)
 {
     int r = -1;
@@ -267,6 +284,7 @@ int main_utf8(int argc, char** argv)
             if (buf == NULL)
                 goto out;
             size_t pos = 0;
+            int32_t s = 0;
             while (1) {
                 uint32_t file_pos = (uint32_t)ftell(file);
                 if (fread(&zsize, sizeof(uint32_t), 1, file) != 1) {
@@ -282,8 +300,9 @@ int main_utf8(int argc, char** argv)
                     fprintf(stderr, "ERROR: Can't read compressed stream at position %08x\n", file_pos);
                     goto out;
                 }
+increase_buf_size:
                 // Elixirs are inflated using a constant chunk size which simplifies overflow handling
-                if (pos + DEFAULT_CHUNK_SIZE > file_size) {
+                if ((s == -2) || (pos + DEFAULT_CHUNK_SIZE > file_size)) {
                     file_size *= 2;
                     uint8_t* old_buf = buf;
                     buf = realloc(buf, file_size);
@@ -293,9 +312,11 @@ int main_utf8(int argc, char** argv)
                         goto out;
                     }
                 }
-                size_t s = tinfl_decompress_mem_to_mem(&buf[pos], file_size - pos, zbuf, zsize,
+                s = decompress_mem_to_mem(&buf[pos], file_size - pos, zbuf, zsize,
                     TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_COMPUTE_ADLER32);
-                if ((s == 0) || (s == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED)) {
+                if (s == -2)
+                    goto increase_buf_size;
+                if (s <= 0) {
                     fprintf(stderr, "ERROR: Can't decompress stream at position %08x\n", file_pos);
                     goto out;
                 }
