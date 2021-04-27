@@ -244,8 +244,8 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Signature doesn't match expected PAK file format.\n");
             goto out;
         }
-        if (hdr.nb_files > 16384) {
-            fprintf(stderr, "ERROR: Too many entries.\n");
+        if (hdr.nb_files > 65536) {
+            fprintf(stderr, "ERROR: Too many entries (%d).\n", hdr.nb_files);
             goto out;
         }
 
