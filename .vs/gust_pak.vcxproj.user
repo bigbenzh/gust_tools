@@ -3,20 +3,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <LocalDebuggerCommandArguments>B:\tmp\PACK03.PAK</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>B:\tmp\PACK_ARTBOOK_00_01.PAK</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <LocalDebuggerCommandArguments>B:\tmp\PACK03.PAK</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>B:\tmp\PACK_ARTBOOK_00_01.PAK</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>B:\tmp\PACK03.PAK</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>B:\tmp\PACK_ARTBOOK_00_01.PAK</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>B:\tmp\PACK03.PAK</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>B:\tmp\PACK_ARTBOOK_00_01.PAK</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>

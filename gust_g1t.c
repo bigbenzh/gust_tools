@@ -761,13 +761,30 @@ int main_utf8(int argc, char** argv)
             uint32_t texture_size = highest_mipmap_size;
             for (int j = 0; j < tex->mipmaps - 1; j++)
                 texture_size += highest_mipmap_size / (4 << (j * 2));
-            uint32_t expected_size = ((i + 1 == hdr->nb_textures) ? g1t_size :
-                x_offset_table[i + 1]) - x_offset_table[i];
-            assert(expected_size >= texture_size + (uint32_t)sizeof(g1t_tex_header));
-            if (texture_size + (uint32_t)sizeof(g1t_tex_header) > expected_size) {
+            uint32_t expected_size = ((i + 1 == hdr->nb_textures) ?
+                g1t_size - hdr->header_size : x_offset_table[i + 1]) - x_offset_table[i];
+            expected_size -= (uint32_t)sizeof(g1t_tex_header);
+            if (texture_size > expected_size) {
                 fprintf(stderr, "ERROR: Computed texture size is larger than actual size\n");
                 continue;
             }
+
+            if (tex->flags & G1T_FLAG_EXTRA_CONTENT) {
+                assert(pos + extra_size < g1t_size);
+                if ((extra_size < 8) || (extra_size % 4 != 0)) {
+                    fprintf(stderr, "ERROR: Can't handle extra_data of size 0x%08x\n", extra_size);
+                } else if (!list_only) {
+                    JSON_Value* json_extra_array_val = json_value_init_array();
+                    JSON_Array* json_extra_array_obj = json_array(json_extra_array_val);
+                    for (uint32_t j = 4; j < extra_size; j += 4)
+                        json_array_append_number(json_extra_array_obj, getle32(&buf[pos + j]));
+                    json_object_set_value(json_object(json_texture), "extra_data", json_extra_array_val);
+                }
+                pos += extra_size;
+                expected_size -= extra_size;
+            }
+            texture_size = expected_size;
+
             snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
             char dims[16];
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
@@ -792,19 +809,7 @@ int main_utf8(int argc, char** argv)
                 fclose(dst);
                 continue;
             }
-            if (tex->flags & G1T_FLAG_EXTRA_CONTENT) {
-                assert(pos + extra_size < g1t_size);
-                if ((extra_size < 8) || (extra_size % 4 != 0)) {
-                    fprintf(stderr, "ERROR: Can't handle extra_data of size 0x%08x\n", extra_size);
-                } else {
-                    JSON_Value* json_extra_array_val = json_value_init_array();
-                    JSON_Array* json_extra_array_obj = json_array(json_extra_array_val);
-                    for (uint32_t j = 4; j < extra_size; j += 4)
-                        json_array_append_number(json_extra_array_obj, getle32(&buf[pos + j]));
-                    json_object_set_value(json_object(json_texture), "extra_data", json_extra_array_val);
-                }
-                pos += extra_size;
-            }
+
             // Non ARGB textures require conversion to be applied, since
             // tools like Visual Studio or PhotoShop can't be bothered
             // to honour the pixel format from the DDS header and instead
