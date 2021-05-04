@@ -65,7 +65,7 @@ typedef struct {
 // This is followed by uint32_t extra_flags[nb_textures]
 
 typedef struct {
-    uint8_t     zero : 4;       // Always 0x0
+    uint8_t     exts : 4;       // Set to 1 for extended textures
     uint8_t     mipmaps : 4;
     uint8_t     type;
     uint8_t     dx : 4;
@@ -409,6 +409,7 @@ int main_utf8(int argc, char** argv)
             JSON_Object* texture_entry = json_array_get_object(textures_array, i);
             g1t_tex_header tex = { 0 };
             tex.type = json_object_get_uint8(texture_entry, "type");
+            tex.exts = json_object_get_uint8(texture_entry, "exts");
             tex.flags = json_object_get_uint32(texture_entry, "flags");
             // Read the DDS file
             snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP,
@@ -582,7 +583,7 @@ int main_utf8(int argc, char** argv)
             char dims[16];
             snprintf(dims, sizeof(dims), "%dx%d", dds_header->width, dds_header->height);
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex.type, hdr.header_size + offset_table[i],
-                (uint32_t)ftell(file) - offset_table[i] - hdr.header_size, path,
+                (uint32_t)ftell(file) - offset_table[i] - hdr.header_size - (uint32_t)sizeof(g1t_tex_header), path,
                 dims, dds_header->mipMapCount, supported ? "Y" : "N");
             free(buf);
             buf = NULL;
@@ -721,6 +722,8 @@ int main_utf8(int argc, char** argv)
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "flags", tex->flags);
+            if (tex->exts != 0)
+                json_object_set_number(json_object(json_texture), "exts", tex->exts);
             uint32_t texture_format = default_texture_format;
             uint32_t bpp = 0;   // Bits per pixel
             bool supported = true, swizzled = false;
