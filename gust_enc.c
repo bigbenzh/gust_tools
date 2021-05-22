@@ -433,6 +433,13 @@ static uint32_t glaze(uint8_t* src, uint32_t src_size, uint8_t** dst)
     // Of course, this means the resulting file won't be compressed in the slightest.
     // But we don't really care about that for modding, do we?...
 
+    // Because we're exclusively working with blocks of [14-270] bytes for our
+    // "compression" shortcut, we can't handle files that are smaller than 14 bytes...
+    if (src_size < 14) {
+        fprintf(stderr, "ERROR: Cannot 'compress' files that are smaller than 14 bytes)\n");
+        return 0;
+    }
+
     bool short_last_block = (src_size % 256 <= 14);
     uint32_t num_blocks = ((src_size + 255) / 256);
     if (short_last_block)
@@ -481,11 +488,11 @@ static uint32_t glaze(uint8_t* src, uint32_t src_size, uint8_t** dst)
     pos = &pos[sizeof(uint32_t)];
     memset(pos, 256 - 14, num_blocks - 1);
     pos = &pos[num_blocks - 1];
-    // Our last block can be 1 to 256 bytes in length, but the size is offset by 14
+    // Our last block can be 14 to 270 bytes in length (with the size offset by 14).
     if (short_last_block)
-        *pos = 255 - 14 + (src_size % 256);
+        *pos = (256 - 14) + (src_size % 256);
     else
-        *pos = (src_size - 14) % 256;
+        *pos = (src_size % 256) - 14;
 
     return compressed_size;
 }
