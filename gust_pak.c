@@ -276,7 +276,7 @@ int main_utf8(int argc, char** argv)
                 last[j] = val[j];
             }
         }
-        is_pak64 = min(sum[0], min(sum[1], sum[2])) != sum[0];
+        is_pak64 = min(sum[0], min(sum[1], sum[2])) == min(sum[1], sum[2]);
         is_a22 = is_pak64 && (min(sum[1], sum[2]) == sum[2]);
         printf("Detected %s PAK format\n\n", is_pak64 ? (is_a22 ? "A22/64-bit" : "A18/64-bit") : "A17/32-bit");
 
