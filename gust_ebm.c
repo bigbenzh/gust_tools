@@ -82,7 +82,7 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
         JSON_Array* json_messages = json_object_get_array(json_object(json), "messages");
-        if (json_array_get_count(json_messages) != abs(nb_messages)) {
+        if (json_array_get_count(json_messages) != (size_t)abs(nb_messages)) {
             fprintf(stderr, "ERROR: Number of messages doesn't match the array size\n");
             goto out;
         }
