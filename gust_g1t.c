@@ -401,6 +401,12 @@ int main_utf8(int argc, char** argv)
         }
 
         printf("TYPE OFFSET     SIZE       NAME");
+        dir = strdup(argv[argc - 1]);
+        if (dir == NULL) {
+            fprintf(stderr, "ERROR: Alloc error\n");
+            goto out;
+        }
+        dir[get_trailing_slash(dir)] = 0;
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
         printf("     DIMENSIONS MIPMAPS SUPPORTED?\n");
@@ -412,7 +418,7 @@ int main_utf8(int argc, char** argv)
             tex.exts = json_object_get_uint8(texture_entry, "exts");
             tex.flags = json_object_get_uint32(texture_entry, "flags");
             // Read the DDS file
-            snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP,
+            snprintf(path, sizeof(path), "%s%s%c%s", dir, _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
             uint32_t dds_size = read_file(path, &buf);
             if (dds_size == UINT32_MAX)
