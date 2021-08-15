@@ -31,6 +31,11 @@
 
 #pragma once
 
+// Flags to indicate whether the data being processed or the platform are Big Endian
+typedef enum { big_endian, little_endian } endianness;
+extern endianness data_endianness;
+extern const endianness platform_endianness;
+
 #define _STRINGIFY(x) #x
 #define STRINGIFY(x) _STRINGIFY(x)
 
@@ -123,89 +128,174 @@ static __inline uint32_t find_msb(uint32_t v)
 
 static __inline uint16_t getle16(const void* p)
 {
-    return *(const uint16_t*)(const uint8_t*)(p);
+    if (platform_endianness == little_endian)
+        return *(const uint16_t*)(const uint8_t*)(p);
+    else
+        return bswap_uint16(getle16(p));
 }
 
 static __inline void setle16(const void* p, const uint16_t v)
 {
-    *((uint16_t*)p) = v;
+    if (platform_endianness == little_endian)
+        *((uint16_t*)p) = v;
+    else
+        *((uint16_t*)p) = bswap_uint16(v);
 }
 
 static __inline uint16_t getbe16(const void* p)
 {
-    return bswap_uint16(getle16(p));
+    if (platform_endianness == little_endian)
+        return bswap_uint16(getle16(p));
+    else
+        return *(const uint16_t*)(const uint8_t*)(p);
 }
 
 static __inline void setbe16(const void* p, const uint16_t v)
 {
-    setle16(p, bswap_uint16(v));
+    if (platform_endianness == little_endian)
+        *((uint16_t*)p) = bswap_uint16(v);
+    else
+        *((uint16_t*)p) = v;
+}
+
+static __inline uint16_t getv16(uint16_t v)
+{
+    return (platform_endianness == data_endianness) ? v : bswap_uint16(v);
+}
+
+static __inline uint16_t getp16(const void* p)
+{
+    return getv16(*(const uint16_t*)(const uint8_t*)(p));
 }
 
 static __inline uint32_t getle24(const void* _p)
 {
     uint8_t* p = (uint8_t*)_p;
-    return p[0] | (p[1] << 8) | (p[2] << 16);
+    if (platform_endianness == little_endian)
+        return p[0] | (p[1] << 8) | (p[2] << 16);
+    else
+        return (p[0] << 16) | (p[1] << 8) | p[2];
 }
 
 static __inline void setle24(const void* _p, const uint32_t v)
 {
     uint8_t* p = (uint8_t*)_p;
-    p[0] = v & 0xff;
-    p[1] = (v >> 8) & 0xff;
-    p[2] = (v >> 16) & 0xff;
+    if (platform_endianness == little_endian) {
+        p[0] = v & 0xff;
+        p[1] = (v >> 8) & 0xff;
+        p[2] = (v >> 16) & 0xff;
+    } else {
+        p[0] = (v >> 16) & 0xff;
+        p[1] = (v >> 8) & 0xff;
+        p[2] = v & 0xff;
+    }
 }
 
 static __inline uint32_t getbe24(const void* _p)
 {
     uint8_t* p = (uint8_t*)_p;
-    return (p[0] << 16) | (p[1] << 8) | p[2];
+    if (platform_endianness == little_endian)
+        return (p[0] << 16) | (p[1] << 8) | p[2];
+    else
+        return p[0] | (p[1] << 8) | (p[2] << 16);
 }
 
 static __inline void setbe24(const void* _p, const uint32_t v)
 {
     uint8_t* p = (uint8_t*)_p;
-    p[0] = (v >> 16) & 0xff;
-    p[1] = (v >> 8) & 0xff;
-    p[2] = v & 0xff;
+    if (platform_endianness == little_endian) {
+        p[0] = (v >> 16) & 0xff;
+        p[1] = (v >> 8) & 0xff;
+        p[2] = v & 0xff;
+    } else {
+        p[0] = v & 0xff;
+        p[1] = (v >> 8) & 0xff;
+        p[2] = (v >> 16) & 0xff;
+    }
 }
 
 static __inline uint32_t getle32(const void* p)
 {
-    return *(const uint32_t*)(const uint8_t*)(p);
+    if (platform_endianness == little_endian)
+        return *(const uint32_t*)(const uint8_t*)(p);
+    else
+        return bswap_uint32(getle32(p));
 }
 
 static __inline void setle32(const void* p, const uint32_t v)
 {
-    *((uint32_t*)p) = v;
+    if (platform_endianness == little_endian)
+        *((uint32_t*)p) = v;
+    else
+        *((uint32_t*)p) = bswap_uint32(v);
 }
 
 static __inline uint32_t getbe32(const void* p)
 {
-    return bswap_uint32(getle32(p));
+    if (platform_endianness == little_endian)
+        return bswap_uint32(getle32(p));
+    else
+        return *(const uint32_t*)(const uint8_t*)(p);
 }
 
 static __inline void setbe32(const void* p, const uint32_t v)
 {
-    setle32(p, bswap_uint32(v));
+    if (platform_endianness == little_endian)
+        *((uint32_t*)p) = bswap_uint32(v);
+    else
+        *((uint32_t*)p) = v;
+}
+
+static __inline uint32_t getv32(uint32_t v)
+{
+    return (platform_endianness == data_endianness) ? v : bswap_uint32(v);
+}
+
+static __inline uint32_t getp32(const void* p)
+{
+    return getv32 (*(const uint32_t*)(const uint8_t*)(p));
 }
 
 static __inline uint64_t getle64(const void* p)
 {
-    return *(const uint64_t*)(const uint8_t*)(p);
+    if (platform_endianness == little_endian)
+        return *(const uint64_t*)(const uint8_t*)(p);
+    else
+        return bswap_uint64(*(const uint64_t*)(const uint8_t*)(p));
 }
 
 static __inline void setle64(const void* p, const uint64_t v)
 {
-    *((uint64_t*)p) = v;
+    if (platform_endianness == little_endian)
+        *((uint64_t*)p) = v;
+    else
+        *((uint64_t*)p) = bswap_uint64(v);
 }
+
 static __inline uint64_t getbe64(const void* p)
 {
-    return bswap_uint64(getle64(p));
+    if (platform_endianness == little_endian)
+        return bswap_uint64(*(const uint64_t*)(const uint8_t*)(p));
+    else
+        return *(const uint64_t*)(const uint8_t*)(p);
 }
 
 static __inline void setbe64(const void* p, const uint64_t v)
 {
-    setle64(p, bswap_uint64(v));
+    if (platform_endianness == little_endian)
+        *((uint64_t*)p) = bswap_uint64(v);
+    else
+        *((uint64_t*)p) = v;
+}
+
+static __inline uint64_t getv64(uint64_t v)
+{
+    return (platform_endianness == data_endianness) ? v : bswap_uint64(v);
+}
+
+static __inline uint64_t getp64(const void* p)
+{
+    return getv64(*(const uint64_t*)(const uint8_t*)(p));
 }
 
 bool create_path(char* path);

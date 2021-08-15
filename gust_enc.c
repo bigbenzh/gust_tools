@@ -73,12 +73,12 @@ typedef struct {
 // Bitmap list prime numbers below a specific value
 static uint8_t* prime_list = NULL;
 static uint32_t random_seed[2];
-static bool big_endian = true;
-
-#define getdata16(x) (big_endian ? getbe16(x) : getle16(x))
-#define getdata32(x) (big_endian ? getbe32(x) : getle32(x))
-#define setdata16(x, v) (big_endian ? setbe16(x, v): setle16(x, v))
-#define setdata32(x, v) (big_endian ? setbe32(x, v): setle32(x, v))
+// TODO: Use endianness handling from util.[h/c]
+static bool is_big_endian = true;
+#define getdata16(x) (is_big_endian ? getbe16(x) : getle16(x))
+#define getdata32(x) (is_big_endian ? getbe32(x) : getle32(x))
+#define setdata16(x, v) (is_big_endian ? setbe16(x, v): setle16(x, v))
+#define setdata32(x, v) (is_big_endian ? setbe32(x, v): setle32(x, v))
 
 /*
  * Helper functions to generate predictible semirandom numbers
@@ -619,7 +619,7 @@ static uint32_t unscramble(uint8_t* payload, uint32_t payload_size, seed_data* s
     uint32_t version = getbe32(payload);
     if (version == 0x03000000) {
         version = 3;
-        big_endian = false;
+        is_big_endian = false;
     }
     if ((version != 2) && (version != 3)) {
         fprintf(stderr, "ERROR: Unsupported encoding version: 0x%08x\n", version);
@@ -851,7 +851,7 @@ int main_utf8(int argc, char** argv)
     // Get the scrambler version to use
     uint32_t version = json_object_get_uint32(seeds_entry, "version");
     if (version == 3)
-        big_endian = false;
+        is_big_endian = false;
     uint32_t max_seed_value = 0;
     for (size_t i = 0; i < array_size(seeds.main); i++) {
         seeds.main[i] = (uint32_t)json_array_get_number(json_object_get_array(seeds_entry, "main"), i);

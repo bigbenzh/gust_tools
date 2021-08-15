@@ -24,6 +24,10 @@
 #include "utf8.h"
 #include "util.h"
 
+// Flag to indicate whether the data being processed or the platform are Big Endian
+endianness data_endianness = little_endian;
+const endianness platform_endianness = little_endian;
+
 bool create_path(char* path)
 {
     bool result = true;
