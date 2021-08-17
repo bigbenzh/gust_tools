@@ -537,7 +537,7 @@ int main_utf8(int argc, char** argv)
 //            case 0x5D: texture_format = DDS_FORMAT_BC5; bits_per_pixel = ?; break;
 //            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
             case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
-            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; supported = false; break;  // UNSUPPORTED!!
+            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
             case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             default:
                 fprintf(stderr, "ERROR: Unhandled texture type 0x%02x\n", tex.type);
@@ -794,7 +794,7 @@ int main_utf8(int argc, char** argv)
 //            case 0x5D: texture_format = DDS_FORMAT_BC5; bits_per_pixel = ?; break;
 //            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
             case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
-            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; supported = false; break;  // UNSUPPORTED!!
+            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
             case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
