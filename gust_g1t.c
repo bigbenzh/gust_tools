@@ -591,8 +591,15 @@ int main_utf8(int argc, char** argv)
                     mo = (int16_t)log2(min(dds_header->width / wf, dds_header->height / hf));
                     break;
                 }
-                mortonize(bpp * wf * hf, mo, dds_header->width / wf, dds_header->height / hf,
-                    dds_payload, dds_size);
+                uint32_t highest_mipmap_size = (dds_header->width * dds_header->height * bpp) / 8;
+                uint32_t offset = 0, morton_size = highest_mipmap_size;
+                for (int j = 1; j <= tex.mipmaps && mo != 0; j++) {
+                    mortonize(bpp * wf * hf, mo, dds_header->width / wf / j, dds_header->height / hf / j,
+                        &dds_payload[offset], morton_size);
+                    offset += morton_size;
+                    morton_size = highest_mipmap_size / ((j * 2) * (j * 2));
+                    mo += (mo > 0) ? -1 : +1;
+                }
             }
             if (texture_format >= DDS_FORMAT_ABGR && texture_format <= DDS_FORMAT_RGBA)
                 rgba_convert(bpp, "ARGB", argb_name[texture_format], dds_payload, dds_size);
@@ -800,10 +807,6 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 continue;
             }
-            if (swizzled && tex->mipmaps != 1) {
-                fprintf(stderr, "ERROR: Swizzled textures with multiple mipmaps are not supported\n");
-                continue;
-            }
             uint32_t highest_mipmap_size = (width * height * bpp) / 8;
             uint32_t texture_size = highest_mipmap_size;
             for (int j = 0; j < tex->mipmaps - 1; j++)
@@ -880,8 +883,8 @@ int main_utf8(int argc, char** argv)
             default:
                 break;
             }
-            int16_t mo;     // Morton order
             if (swizzled) {
+                int16_t mo;     // Morton order
                 switch (hdr->platform) {
                 case SONY_PS4:
                 case NINTENDO_3DS:
@@ -892,7 +895,14 @@ int main_utf8(int argc, char** argv)
                     mo = -1 * (int16_t)log2(min(height / hf, width / wf));
                     break;
                 }
-                mortonize(bpp * wf * hf, mo, width / wf, height / hf, &buf[pos], texture_size);
+                uint32_t offset = 0, morton_size = highest_mipmap_size;
+                for (int j = 1; j <= tex->mipmaps && mo != 0; j++) {
+                    mortonize(bpp * wf * hf, mo, width / wf / j, height / hf / j,
+                        &buf[pos + offset], morton_size);
+                    offset += morton_size;
+                    morton_size = highest_mipmap_size / ((j * 2) * (j * 2));
+                    mo += (mo > 0) ? -1 : +1;
+                }
             }
             if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x09 || tex->type == 0x45)))
                 flip(bpp, &buf[pos], texture_size, width);

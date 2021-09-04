@@ -3,20 +3,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <LocalDebuggerCommandArguments>ps4\cnn_battlehelp_image001.g1t</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>br_vita\PC00_Scl</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <LocalDebuggerCommandArguments>ps4\cnn_battlehelp_image001.g1t</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>br_vita\PC00_Scl</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>ps4\cnn_battlehelp_image001.g1t</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>br_vita\PC00_Scl</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>ps4\cnn_battlehelp_image001.g1t</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>br_vita\PC00_Scl</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
