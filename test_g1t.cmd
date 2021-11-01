@@ -23,6 +23,7 @@ set list=^
   type_59_win^
   type_59_win_2^
   type_5b_win^
+  type_5b_win_2^
   type_5f_win^
   type_5f_win_2^
   type_60_ps4^
@@ -30,7 +31,7 @@ set list=^
   type_62_ps4_2
 
 for %%a in (%list%) do (
-   if exist %%a.g1t.bak move /y %%a.g1t.bak %%a.g1t >NUL 2>&1
+  if exist %%a.g1t.bak move /y %%a.g1t.bak %%a.g1t >NUL 2>&1
 )
 
 for %%a in (%list%) do (

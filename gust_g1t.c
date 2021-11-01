@@ -33,8 +33,9 @@
 #define G1TG_BE_MAGIC           0x47543147  // 'G1TG'
 
 // G1T texture flags
-#define G1T_FLAG_SRGB           0x02000000  // Not sure if this one is correct...
-#define G1T_FLAG_EXTRA_CONTENT  0x10000000
+#define G1T_FLAG_SRGB           0x0002000000ULL // Not sure if this one is correct...
+#define G1T_FLAG_LOCAL_XDATA    0x0010000000ULL // Set if the texture has local extra data in the texture entry.
+#define G1T_FLAG_GLOBAL_XDATA   0x1000000000ULL // Set if the texture has global extra data at the beginning of the file.
 
 // Known platforms
 #define SONY_PS2                0x00
@@ -63,7 +64,9 @@ typedef struct {
     uint32_t    extra_size;
 } g1t_header;
 
-// This is followed by uint32_t extra_flags[nb_textures]
+// This is (optionally) followed by uint32_t extra_flags[nb_textures]
+// This is followed by uint32_t offset[nb_textures]
+// This is (optionally) followed by an array of global extra data (for textures with G1T_FLAG_GLOBAL_XDATA)
 
 typedef struct {
     uint8_t     exts : 4;       // Set to 1 for extended textures
@@ -71,9 +74,10 @@ typedef struct {
     uint8_t     type;
     uint8_t     dx : 4;
     uint8_t     dy : 4;
-    uint8_t     unused;         // Always 0x00
-    // Seems to be an extra set of nibbles (that need to be reordered for Big Endian)
-    uint32_t    flags;          // 0x10211000 or 0x00211000 or 0x12222000 for FT SRGB
+    // The flags appear to be a set of nibbles (that need to be reordered
+    // for Big Endian) that occupy 5 bytes in all.
+    uint8_t     hflags;         // high part
+    uint32_t    lflags;         // low part
 } g1t_tex_header;
 
 // May be followed by extra_data[]
@@ -84,7 +88,7 @@ typedef struct {
 const char* argb_name[] = { NULL, NULL, "ABGR", "ARGB", "GRAB", "RGBA" };
 
 static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t height,
-                               uint32_t bpp, uint32_t mipmaps, uint32_t flags)
+                               uint32_t bpp, uint32_t mipmaps, uint64_t flags)
 {
     if ((fd == NULL) || (width == 0) || (height == 0))
         return 0;
@@ -378,13 +382,13 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
 
-        JSON_Array* extra_flags_array = json_object_get_array(json_object(json), "extra_flags");
-        if (json_array_get_count(extra_flags_array) != getv32(hdr.nb_textures)) {
+        JSON_Array* json_extra_flags_array = json_object_get_array(json_object(json), "extra_flags");
+        if (json_array_get_count(json_extra_flags_array) != getv32(hdr.nb_textures)) {
             fprintf(stderr, "ERROR: number of extra flags doesn't match number of textures\n");
             goto out;
         }
         for (uint32_t i = 0; i < getv32(hdr.nb_textures); i++) {
-            uint32_t extra_flag = getv32((uint32_t)json_array_get_number(extra_flags_array, i));
+            uint32_t extra_flag = getv32((uint32_t)json_array_get_number(json_extra_flags_array, i));
             if (fwrite(&extra_flag, sizeof(uint32_t), 1, file) != 1) {
                 fprintf(stderr, "ERROR: Can't write extra flags\n");
                 goto out;
@@ -396,6 +400,18 @@ int main_utf8(int argc, char** argv)
         if (fwrite(offset_table, getv32(hdr.nb_textures) * sizeof(uint32_t), 1, file) != 1) {
             fprintf(stderr, "ERROR: Can't write texture offsets\n");
             goto out;
+        }
+
+        // Deal with the global extra data array
+        if (hdr.extra_size != 0) {
+            JSON_Array* json_global_extra_data_array = json_object_get_array(json_object(json), "extra_data");
+            for (uint32_t i = 0; i < hdr.extra_size / sizeof(uint32_t); i++) {
+                uint32_t extra_data = getv32((uint32_t)json_array_get_number(json_global_extra_data_array, i));
+                if (fwrite(&extra_data, sizeof(uint32_t), 1, file) != 1) {
+                    fprintf(stderr, "ERROR: Can't write global extra data\n");
+                    goto out;
+                }
+            }
         }
 
         JSON_Array* textures_array = json_object_get_array(json_object(json), "textures");
@@ -420,7 +436,9 @@ int main_utf8(int argc, char** argv)
             g1t_tex_header tex = { 0 };
             tex.type = json_object_get_uint8(texture_entry, "type");
             tex.exts = json_object_get_uint8(texture_entry, "exts");
-            tex.flags = json_object_get_uint32(texture_entry, "flags");
+            uint64_t flags = json_object_get_uint64(texture_entry, "flags");
+            tex.hflags = (uint8_t)(flags >> 32);
+            tex.lflags = (uint32_t)flags;
             // Read the DDS file
             snprintf(path, sizeof(path), "%s%s%c%s", dir, _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
@@ -450,7 +468,6 @@ int main_utf8(int argc, char** argv)
                 tex.dx = (uint8_t)find_msb(dds_header->width);
                 tex.dy = (uint8_t)find_msb(dds_header->height);
             }
-            bool has_extra_content = (tex.flags & G1T_FLAG_EXTRA_CONTENT);
             if (data_endianness != platform_endianness) {
                 uint8_t swap_tmp = tex.dx;
                 tex.dx = tex.dy;
@@ -458,7 +475,8 @@ int main_utf8(int argc, char** argv)
                 swap_tmp = tex.exts;
                 tex.exts = tex.mipmaps;
                 tex.mipmaps = swap_tmp;
-                tex.flags = ((tex.flags & 0xf0f0f0f0) >> 4) | ((tex.flags & 0x0f0f0f0f) << 4);
+                // TODO: Not sure if we need to apply the same to hflags...
+                tex.lflags = ((tex.lflags & 0xf0f0f0f0) >> 4) | ((tex.lflags & 0x0f0f0f0f) << 4);
             }
             // Write texture header
             if (fwrite(&tex, sizeof(tex), 1, file) != 1) {
@@ -466,9 +484,9 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
             // Write extra data
-            if (has_extra_content) {
-                JSON_Array* extra_data_array = json_object_get_array(texture_entry, "extra_data");
-                uint32_t extra_data_size = (uint32_t)(json_array_get_count(extra_data_array) + 1) * sizeof(uint32_t);
+            if (flags & G1T_FLAG_LOCAL_XDATA) {
+                JSON_Array* json_local_extra_data_array = json_object_get_array(texture_entry, "extra_data");
+                uint32_t extra_data_size = (uint32_t)(json_array_get_count(json_local_extra_data_array) + 1) * sizeof(uint32_t);
                 if (!po2_sizes && extra_data_size < 4 * sizeof(uint32_t)) {
                     fprintf(stderr, "ERROR: Non power-of-two width or height is missing from extra data\n");
                     goto out;
@@ -478,19 +496,19 @@ int main_utf8(int argc, char** argv)
                     fprintf(stderr, "ERROR: Can't write extra data size\n");
                     goto out;
                 }
-                for (size_t j = 0; j < json_array_get_count(extra_data_array); j++) {
-                    uint32_t extra_data = (uint32_t)json_array_get_number(extra_data_array, j);
+                for (size_t j = 0; j < json_array_get_count(json_local_extra_data_array); j++) {
+                    uint32_t extra_data = (uint32_t)json_array_get_number(json_local_extra_data_array, j);
                     if ((j == 2) && (!po2_sizes) && (extra_data != dds_header->width)) {
-                        fprintf(stderr, "ERROR: DDS width and extra data width don't match\n");
+                        fprintf(stderr, "ERROR: DDS width and local extra data width don't match\n");
                         goto out;
                     }
                     if ((j == 3) && (!po2_sizes) && (extra_data != dds_header->height)) {
-                        fprintf(stderr, "ERROR: DDS height and extra data height don't match\n");
+                        fprintf(stderr, "ERROR: DDS height and local extra data height don't match\n");
                         goto out;
                     }
                     extra_data = getv32(extra_data);
                     if (fwrite(&extra_data, sizeof(uint32_t), 1, file) != 1) {
-                        fprintf(stderr, "ERROR: Can't write extra data\n");
+                        fprintf(stderr, "ERROR: Can't write local extra data\n");
                         goto out;
                     }
                 }
@@ -690,8 +708,13 @@ int main_utf8(int argc, char** argv)
         version[4] = 0;
         if (hdr->version >> 16 != 0x3030)
             fprintf(stderr, "WARNING: Potentially unsupported G1T version %s\n", version);
-        if (hdr->extra_size != 0) {
-            fprintf(stderr, "ERROR: Can't handle G1T files with extra content\n");
+        if (hdr->extra_size % sizeof(uint32_t)) {
+            fprintf(stderr, "ERROR: Can't handle G1T files with global extra data that's not a multiple of %d\n",
+                (int)sizeof(uint32_t));
+            goto out;
+        }
+        if (hdr->extra_size > 0xFFFF) {
+            fprintf(stderr, "ERROR: Can't handle G1T files with more than 64 KB of global extra data\n");
             goto out;
         }
 
@@ -711,8 +734,13 @@ int main_utf8(int argc, char** argv)
         if (!list_only && !create_path(argv[argc - 1]))
             goto out;
 
-        JSON_Value* json_flags_array = json_value_init_array();
+        JSON_Value* json_extra_flags_array = json_value_init_array();
+        JSON_Value* json_global_extra_data_array = json_value_init_array();
         JSON_Value* json_textures_array = json_value_init_array();
+
+        for (uint32_t i = 0; i < hdr->extra_size; i += sizeof(uint32_t))
+            json_array_append_number(json_array(json_global_extra_data_array),
+                getle32(&buf[hdr->header_size + hdr->nb_textures * sizeof(uint32_t) + i]));
 
         printf("TYPE OFFSET     SIZE       NAME");
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
@@ -744,7 +772,8 @@ int main_utf8(int argc, char** argv)
 
         for (uint32_t i = 0; i < hdr->nb_textures; i++) {
             // There's an array of flags after the hdr
-            json_array_append_number(json_array(json_flags_array), getle32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]));
+            json_array_append_number(json_array(json_extra_flags_array),
+                getle32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]));
             uint32_t pos = hdr->header_size + getv32(x_offset_table[i]);
             g1t_tex_header* tex = (g1t_tex_header*)&buf[pos];
             if (data_endianness != platform_endianness) {
@@ -754,12 +783,14 @@ int main_utf8(int argc, char** argv)
                 swap_tmp = tex->exts;
                 tex->exts = tex->mipmaps;
                 tex->mipmaps = swap_tmp;
-                tex->flags = ((tex->flags & 0xf0f0f0f0) >> 4) | ((tex->flags & 0x0f0f0f0f) << 4);
+                // TODO: Not sure if we need to apply the same to hflags...
+                tex->lflags = ((tex->lflags & 0xf0f0f0f0) >> 4) | ((tex->lflags & 0x0f0f0f0f) << 4);
             }
+            uint64_t flags = (uint64_t)tex->hflags << 32 | tex->lflags;
             pos += sizeof(g1t_tex_header);
             uint32_t width = 1 << tex->dx;
             uint32_t height = 1 << tex->dy;
-            uint32_t extra_size = (tex->flags & G1T_FLAG_EXTRA_CONTENT) ? getp32(&buf[pos]) : 0;
+            uint32_t extra_size = (flags & G1T_FLAG_LOCAL_XDATA) ? getp32(&buf[pos]) : 0;
             // Non power-of-two width and height may be provided in the extra data
             if (extra_size >= 0x14) {
                 if (width == 1)
@@ -772,7 +803,7 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%03d.dds", i);
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
-            json_object_set_number(json_object(json_texture), "flags", tex->flags);
+            json_object_set_number(json_object(json_texture), "flags", (double)flags);
             if (tex->exts != 0)
                 json_object_set_number(json_object(json_texture), "exts", tex->exts);
             uint32_t texture_format = default_texture_format;
@@ -819,10 +850,10 @@ int main_utf8(int argc, char** argv)
                 continue;
             }
 
-            if (tex->flags & G1T_FLAG_EXTRA_CONTENT) {
+            if (flags & G1T_FLAG_LOCAL_XDATA) {
                 assert(pos + extra_size < g1t_size);
                 if ((extra_size < 8) || (extra_size % 4 != 0)) {
-                    fprintf(stderr, "ERROR: Can't handle extra_data of size 0x%08x\n", extra_size);
+                    fprintf(stderr, "ERROR: Can't handle local extra_data of size 0x%08x\n", extra_size);
                 } else if (!list_only) {
                     JSON_Value* json_extra_array_val = json_value_init_array();
                     JSON_Array* json_extra_array_obj = json_array(json_extra_array_val);
@@ -854,7 +885,7 @@ int main_utf8(int argc, char** argv)
                 continue;
             }
             if (write_dds_header(dst, texture_format, width, height, bpp,
-                                 tex->mipmaps, tex->flags) != 1) {
+                                 tex->mipmaps, flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
                 continue;
@@ -915,7 +946,9 @@ int main_utf8(int argc, char** argv)
             json_array_append_value(json_array(json_textures_array), json_texture);
         }
 
-        json_object_set_value(json_object(json), "extra_flags", json_flags_array);
+        json_object_set_value(json_object(json), "extra_flags", json_extra_flags_array);
+        if (hdr->extra_size)
+            json_object_set_value(json_object(json), "extra_data", json_global_extra_data_array);
         json_object_set_value(json_object(json), "textures", json_textures_array);
         snprintf(path, sizeof(path), "%s%cg1t.json", argv[argc - 1], PATH_SEP);
         if (!list_only)
