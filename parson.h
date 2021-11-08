@@ -133,6 +133,10 @@ const char  * json_object_dotget_string (const JSON_Object *object, const char *
 JSON_Object * json_object_dotget_object (const JSON_Object *object, const char *name);
 JSON_Array  * json_object_dotget_array  (const JSON_Object *object, const char *name);
 double        json_object_dotget_number (const JSON_Object *object, const char *name); /* returns 0 on fail */
+#define       json_object_dotget_uint8  (uint8_t)json_object_dotget_number
+#define       json_object_dotget_uint16 (uint16_t)json_object_dotget_number
+#define       json_object_dotget_uint32 (uint32_t)json_object_dotget_number
+#define       json_object_dotget_uint64 (uint64_t)json_object_dotget_number
 int           json_object_dotget_boolean(const JSON_Object *object, const char *name); /* returns -1 on fail */
 
 /* Functions to get available names */
@@ -182,6 +186,10 @@ const char  * json_array_get_string (const JSON_Array *array, size_t index);
 JSON_Object * json_array_get_object (const JSON_Array *array, size_t index);
 JSON_Array  * json_array_get_array  (const JSON_Array *array, size_t index);
 double        json_array_get_number (const JSON_Array *array, size_t index); /* returns 0 on fail */
+#define       json_array_get_uint8  (uint8_t)json_array_get_number
+#define       json_array_get_uint16 (uint16_t)json_array_get_number
+#define       json_array_get_uint32 (uint32_t)json_array_get_number
+#define       json_array_get_uint64 (uint64_t)json_array_get_number
 int           json_array_get_boolean(const JSON_Array *array, size_t index); /* returns -1 on fail */
 size_t        json_array_get_count  (const JSON_Array *array);
 JSON_Value  * json_array_get_wrapping_value(const JSON_Array *array);

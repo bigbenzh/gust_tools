@@ -30,9 +30,14 @@ SRC5=${BIN5}.c util.c parson.c
 OBJ5=${SRC5:.c=.o}
 DEP5=${SRC5:.c=.d}
 
-BIN=${BIN1}${EXE} ${BIN2}${EXE} ${BIN3}${EXE} ${BIN4}${EXE} ${BIN5}${EXE}
-OBJ=${OBJ1} ${OBJ2} ${OBJ3} ${OBJ4} ${OBJ5}
-DEP=${DEP1} ${DEP2} ${DEP3} ${DEP4} ${DEP5}
+BIN6=gust_gmpk
+SRC6=${BIN6}.c util.c parson.c
+OBJ6=${SRC6:.c=.o}
+DEP6=${SRC6:.c=.d}
+
+BIN=${BIN1}${EXE} ${BIN2}${EXE} ${BIN3}${EXE} ${BIN4}${EXE} ${BIN5}${EXE} ${BIN6}${EXE}
+OBJ=${OBJ1} ${OBJ2} ${OBJ3} ${OBJ4} ${OBJ5} ${OBJ6}
+DEP=${DEP1} ${DEP2} ${DEP3} ${DEP4} ${DEP5} ${DEP6}
 
 # -Wno-sequence-point because *dst++ = dst[-d]; is only ambiguous for people who don't know how CPUs work.
 CFLAGS=-std=c99 -pipe -fvisibility=hidden -Wall -Wextra -Werror -Wno-sequence-point -Wno-unknown-pragmas -UNDEBUG -D_GNU_SOURCE -O2
@@ -51,23 +56,27 @@ clean:
 
 ${BIN1}${EXE}: ${OBJ1}
 	@echo [L] $@
-	@${CC} ${LDFLAGS} -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS}
 
 ${BIN2}${EXE}: ${OBJ2}
 	@echo [L] $@
-	@${CC} ${LDFLAGS} -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS} 
 
 ${BIN3}${EXE}: ${OBJ3}
 	@echo [L] $@
-	@${CC} ${LDFLAGS} -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS}
 
 ${BIN4}${EXE}: ${OBJ4}
 	@echo [L] $@
-	@${CC} ${LDFLAGS} -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS}
 
 ${BIN5}${EXE}: ${OBJ5}
 	@echo [L] $@
-	@${CC} ${LDFLAGS} -o $@ $^
+	@${CC} -o $@ $^ ${LDFLAGS}
+
+${BIN6}${EXE}: ${OBJ6}
+	@echo [L] $@
+	@${CC} -o $@ $^ ${LDFLAGS}
 
 %.o: %.c
 	@echo [C] $<

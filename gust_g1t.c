@@ -663,16 +663,16 @@ int main_utf8(int argc, char** argv)
         char* g1t_pos = &argv[argc - 1][len - 4];
         file = fopen_utf8(argv[argc - 1], "rb");
         if (file == NULL) {
-            fprintf(stderr, "ERROR: Can't open file '%s'", argv[argc - 1]);
+            fprintf(stderr, "ERROR: Can't open file '%s'\n", argv[argc - 1]);
             goto out;
         }
 
         if (fread(&magic, sizeof(magic), 1, file) != 1) {
-            fprintf(stderr, "ERROR: Can't read from '%s'", argv[argc - 1]);
+            fprintf(stderr, "ERROR: Can't read from '%s'\n", argv[argc - 1]);
             goto out;
         }
         if ((magic != G1TG_LE_MAGIC) && (magic != G1TG_BE_MAGIC)) {
-            fprintf(stderr, "ERROR: Not a G1T file (bad magic) or unsupported platform");
+            fprintf(stderr, "ERROR: Not a G1T file (bad magic) or unsupported platform\n");
             goto out;
         }
         if (magic == G1TG_BE_MAGIC)
@@ -685,7 +685,7 @@ int main_utf8(int argc, char** argv)
         if (buf == NULL)
             goto out;
         if (fread(buf, 1, g1t_size, file) != g1t_size) {
-            fprintf(stderr, "ERROR: Can't read file");
+            fprintf(stderr, "ERROR: Can't read file\n");
             goto out;
         }
 

@@ -89,6 +89,14 @@ extern const endianness platform_endianness;
 #define is_power_of_2(x) (((x) & ((x) - 1)) == 0)
 #endif
 
+#define align_to_4(x) (((x) + 0x3) & ~0x3)
+#define align_to_8(x) (((x) + 0x7) & ~0x7)
+#define align_to_16(x) (((x) + 0xf) & ~0xf)
+
+#define sizeof_16 (uint16_t)sizeof
+#define sizeof_32 (uint32_t)sizeof
+#define sizeof_64 (uint64_t)sizeof
+
 #if defined(_WIN32)
 char* _basename_win32(const char* path, bool remove_extension);
 char* _dirname_win32(const char* path);

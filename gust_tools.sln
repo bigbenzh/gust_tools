@@ -13,6 +13,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "gust_enc", ".vs\gust_enc.vc
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "gust_ebm", ".vs\gust_ebm.vcxproj", "{6494F80D-FF09-48B9-AE96-DB70AB476204}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "gust_gmpk", ".vs\gust_gmpk.vcxproj", "{CC8C9202-E94D-4B66-B40F-9692B46C7351}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -61,6 +63,14 @@ Global
 		{6494F80D-FF09-48B9-AE96-DB70AB476204}.Release|x64.Build.0 = Release|x64
 		{6494F80D-FF09-48B9-AE96-DB70AB476204}.Release|x86.ActiveCfg = Release|Win32
 		{6494F80D-FF09-48B9-AE96-DB70AB476204}.Release|x86.Build.0 = Release|Win32
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Debug|x64.ActiveCfg = Debug|x64
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Debug|x64.Build.0 = Debug|x64
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Debug|x86.ActiveCfg = Debug|Win32
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Debug|x86.Build.0 = Debug|Win32
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Release|x64.ActiveCfg = Release|x64
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Release|x64.Build.0 = Release|x64
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Release|x86.ActiveCfg = Release|Win32
+		{CC8C9202-E94D-4B66-B40F-9692B46C7351}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

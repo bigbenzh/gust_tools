@@ -48,6 +48,14 @@ echo =^> %APP_NAME%.exe
 echo.
 if not "%1"=="" goto out
 
+:gmpk
+set APP_NAME=gust_gmpk
+cl.exe %APP_NAME%.c util.c parson.c /Fe%APP_NAME%.exe
+if %ERRORLEVEL% neq 0 goto out
+echo =^> %APP_NAME%.exe
+echo.
+if not "%1"=="" goto out
+
 :out
 endlocal
 if %ERRORLEVEL% neq 0 pause
