@@ -1,6 +1,6 @@
 # Gust Tools
 
-[![Build status](https://img.shields.io/appveyor/ci/VitaSmith/gust-tools.svg?style=flat-square)](https://ci.appveyor.com/project/VitaSmith/gust-tools)
+[![Build status](https://img.shields.io/github/workflow/status/VitaSmith/gust_tools/Build.svg?style=flat-square)](https://github.com/VitaSmith/gust_tools/actions/workflows/build.yml)
 [![Github stats](https://img.shields.io/github/downloads/VitaSmith/gust_tools/total.svg?style=flat-square)](https://github.com/VitaSmith/gust_tools/releases)
 [![Latest release](https://img.shields.io/github/release-pre/VitaSmith/gust_tools?style=flat-square)](https://github.com/VitaSmith/gust_tools/releases)
 
@@ -8,13 +8,15 @@ A set of commandline utilities designed to work with Gust (Koei/Tecmo) PC game a
 [_Atelier series_](https://store.steampowered.com/search/?sort_by=Name_ASC&term=atelier&tags=122&category1=998),
 [_Nights of Azure series_](https://store.steampowered.com/search/?term=%22nights%20of%20azure%22&category1=998),
 [_Blue Reflection_](https://store.steampowered.com/app/658260/BLUE_REFLECTION__BLUE_REFLECTION/),
-[_Fairy Tail_](https://store.steampowered.com/app/1233260/FAIRY_TAIL/), ...
+[_Fairy Tail_](https://store.steampowered.com/app/1233260/FAIRY_TAIL/),
+[_Fatal Frame_](https://store.steampowered.com/app/1732190/FATAL_FRAME__PROJECT_ZERO_Maiden_of_Black_Water/) ...
 
 Utilities
 =========
 
 * `gust_pak`: Unpack or repack a Gust `.pak` archive.
 * `gust_elixir`: Unpack or repack a Gust `.elixir[.gz]` archive.
+* `gust_gmpk`: Unpack or repack a Gust `.gmpk` archive.
 * `gust_g1t`: Unpack or repack a Gust `.g1t` texture archive.
 * `gust_enc`: Encode or decode a Gust `.e` archive.
 * `gust_ebm`: Convert a `.ebm` message file to or from an editable JSON file.

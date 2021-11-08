@@ -49,7 +49,7 @@ typedef struct {
     uint32_t    num_records;
     uint32_t    record_size;    // Size is a number of 32-bit words
     uint32_t    num_entries;
-    uint32_t    entry_size;     // Size is a number nb of 32-bit words
+    uint32_t    entry_size;     // Size is a number of 32-bit words
     uint32_t    records_offset;
     uint32_t    entries_offset;
     uint32_t    unknown_offset;
@@ -478,7 +478,6 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
         return 0;
     }
 
-    // TODO: check that last offset = json SDP size
     return written;
 }
 
