@@ -24,7 +24,7 @@ for %%a in (%list%) do (
 for %%a in (%list%) do (
   echo | set /p PrintName=* %%a.%EXT%... 
   if exist %%a.%EXT% (
-    gust_%EXT%.exe %%a.%EXT% >NUL 2>&1
+    gust_%EXT%.exe -y %%a.%EXT% >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err
     gust_%EXT%.exe %%a >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err

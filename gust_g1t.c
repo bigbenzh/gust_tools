@@ -315,10 +315,11 @@ int main_utf8(int argc, char** argv)
     JSON_Value* json = NULL;
     bool list_only = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'l');
     bool flip_image = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'f');
+    bool no_prompt = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'y');
 
-    if ((argc != 2) && !list_only && !flip_image) {
+    if ((argc != 2) && !list_only && !flip_image && !no_prompt) {
         printf("%s %s (c) 2019-2021 VitaSmith\n\n"
-            "Usage: %s [-l] [-f] <file or directory>\n\n"
+            "Usage: %s [-l] [-f] [-y] <file or directory>\n\n"
             "Extracts (file) or recreates (directory) a Gust .g1t texture archive.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
             "is being overwritten for the first time.\n",
@@ -965,7 +966,7 @@ out:
     if (file != NULL)
         fclose(file);
 
-    if (r != 0) {
+    if (r != 0 && !no_prompt) {
         fflush(stdin);
         printf("\nPress any key to continue...");
         (void)getchar();

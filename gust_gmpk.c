@@ -28,39 +28,40 @@
 #include "parson.h"
 #include "dds.h"
 
-#define JSON_VERSION            1
+#define JSON_VERSION            2
 #define GMPK_LE_MAGIC           0x4B504D47  // 'GMPK'
 #define GMPK_BE_MAGIC           0x474D504B  // 'KPMG'
-#define SPD1_LE_MAGIC           0x53445031  // '1DPS'
-#define SPD1_BE_MAGIC           0x31504453  // 'SPD1'
+#define SDP1_LE_MAGIC           0x53445031  // '1PDS'
+#define SDP1_BE_MAGIC           0x31504453  // 'SDP1'
 #define NID1_LE_MAGIC           0x4E494431  // '1DIN'
 #define NID1_BE_MAGIC           0x3144494E  // 'NID1'
 #define EXPECTED_VERSION        0x00312E31
 #define ENTRY_FLAG_HAS_G1X      0x00000001
 #define MIN_HEADER_SIZE         0x100
+#define MAX_HEADER_SIZE         0x10000
+#define MAX_NAMES_COUNT         0x100
 #define REPORT_URL              "https://github.com/VitaSmith/gust_tools/issues"
 
 #pragma pack(push, 1)
-// Packed Data Structure #1
+// Structure Packed Data, Type 1
 typedef struct {
     char        tag[8];         // nametag
-    uint32_t    magic;          // 'SPD1'
+    uint32_t    magic;          // 'SDP1'
     uint32_t    size;           // total size of this structure in bytes
-    uint32_t    num_records;
-    uint32_t    record_size;    // Size is a number of 32-bit words
-    uint32_t    num_entries;
-    uint32_t    entry_size;     // Size is a number of 32-bit words
-    uint32_t    records_offset;
-    uint32_t    entries_offset;
+    uint32_t    data_count;     // total number of data records / 2
+    uint32_t    data_record_size; // Size of a data record, in 32-bit words
+    uint32_t    entry_count;    // total number of entries
+    uint32_t    entry_record_size; // Size of an entry record, in 32-bit words
+    uint32_t    data_offset;
+    uint32_t    entry_offset;
     uint32_t    unknown_offset;
     uint32_t    entrymap_offset;
-} spd1_header;
+} sdp1_header;
 
-// followed by 2 * num_records * record_size (at records_offset)
-// may be followed by extra data[] (if space before entry data)
-// followed by num_entries * entry_size (at entries_offset)
+// followed by 2 * data_count [+1] * data_record_size (at data_offset)
+// followed by entry_count * entry_record_size (at entry_offset)
 
-// Name ID structure #1
+// Name ID structure, Type 1
 typedef struct {
     char        tag[8];         // nametag
     uint32_t    magic;          // 'NID1'
@@ -79,10 +80,23 @@ typedef struct {
     uint32_t    namemap_offset;
     uint32_t    namemap_size;
     uint32_t    unknown1;
-    uint32_t    num_files;
+    uint32_t    files_count;
     uint32_t    unknown2;
     uint32_t    max_name_len;
 } root_entry;
+
+// Structure of a model entry
+typedef struct {
+    uint32_t    has_component;
+    uint32_t    file_index;
+} model_component;
+
+typedef struct {
+    model_component component[2];
+    // The following are only present if we have submodels
+    uint32_t    has_submodel;
+    uint32_t    submodel_count;
+} model_entry;
 
 // Structure of a packed data file entry header
 typedef struct {
@@ -91,6 +105,17 @@ typedef struct {
 } file_entry;
 
 #pragma pack(pop)
+
+const char* known_sdp_tags[] = {
+    "GMPK1.1",
+    "EntryMap",
+};
+
+const char* known_nid_tags[] = {
+    "NameMap",
+};
+
+static uint32_t *entry_data = NULL, entry_data_count, files_count;
 
 JSON_Value* read_nid(uint8_t* buf, uint32_t size)
 {
@@ -109,12 +134,20 @@ JSON_Value* read_nid(uint8_t* buf, uint32_t size)
         return NULL;
     }
 
-    JSON_Value* json_nid = json_value_init_object();
-
     memcpy(tag, hdr->tag, 8);
+    for (uint32_t i = 0; i < array_size(known_nid_tags); i++) {
+        if (strcmp(tag, known_nid_tags[i]) == 0)
+            break;
+        if (i == array_size(known_nid_tags) - 1) {
+            fprintf(stderr, "ERROR: Unsupported SDP tag '%s'.\n", tag);
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+            return NULL;
+        }
+    }
+
+    JSON_Value* json_nid = json_value_init_object();
     json_object_set_string(json_object(json_nid), "tag", (const char*)tag);
     json_object_set_string(json_object(json_nid), "type", "NID1");
-    json_object_set_number(json_object(json_nid), "size", hdr->size);
 
     // Process name entries
     size_t offset = sizeof(nid1_header);
@@ -149,96 +182,128 @@ JSON_Value* read_nid(uint8_t* buf, uint32_t size)
 
 JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
 {
-    char* tag[9] = { 0 };
-    if (getle32(&buf[8]) == SPD1_BE_MAGIC) {
+    char tag[9] = { 0 };
+    if (getle32(&buf[8]) == SDP1_BE_MAGIC) {
         fprintf(stderr, "ERROR: Big-Endian GMPK files are not supported\n");
         return NULL;
     }
-    if (getle32(&buf[8]) != SPD1_LE_MAGIC) {
-        fprintf(stderr, "ERROR: Bad SPD1 magic\n");
+    if (getle32(&buf[8]) != SDP1_LE_MAGIC) {
+        fprintf(stderr, "ERROR: Bad SDP magic\n");
         return NULL;
     }
-    spd1_header* hdr = (spd1_header*)buf;
-    if (size < sizeof(spd1_header) || hdr->size > size) {
-        fprintf(stderr, "ERROR: File size mismatch\n");
+    sdp1_header* hdr = (sdp1_header*)buf;
+    if (hdr->size < sizeof(sdp1_header) || hdr->size > size) {
+        fprintf(stderr, "ERROR: SDP size mismatch\n");
         return NULL;
+    }
+    if (hdr->size > MAX_HEADER_SIZE) {
+        fprintf(stderr, "ERROR: SPD header is larger than %d KB.\n", MAX_HEADER_SIZE / 1024);
+        fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+        return NULL;
+    }
+
+    memcpy(tag, hdr->tag, 8);
+    for (uint32_t i = 0; i < array_size(known_sdp_tags); i++) {
+        if (strcmp(tag, known_sdp_tags[i]) == 0)
+            break;
+        if (i == array_size(known_sdp_tags) - 1) {
+            fprintf(stderr, "ERROR: Unsupported SDP tag '%s'.\n", tag);
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+            return NULL;
+        }
     }
 
     JSON_Value* json_sdp = json_value_init_object();
-
-    memcpy(tag, hdr->tag, 8);
     json_object_set_string(json_object(json_sdp), "tag", (const char*)tag);
-    json_object_set_string(json_object(json_sdp), "type", "SPD1");
-    json_object_set_number(json_object(json_sdp), "size", hdr->size);
+    json_object_set_string(json_object(json_sdp), "type", "SDP1");
 
-    // Process records
-    uint32_t offset = hdr->records_offset;
-    JSON_Value* json_record_array = json_value_init_array();
-    for (uint32_t k = 0; k < 2; k++) {
-        for (uint32_t i = 0; i < hdr->num_records; i++) {
-            JSON_Value* json_entry_data_array = json_value_init_array();
-            for (uint32_t j = 0; j < hdr->record_size; j++)
-                json_array_append_number(json_array(json_entry_data_array),
-                    getle32(&buf[offset + (i * hdr->record_size + j) * sizeof_32(uint32_t)]));
-            json_array_append_value(json_array(json_record_array), json_entry_data_array);
-        }
-        offset += (hdr->num_records * hdr->record_size) * sizeof_32(uint32_t);
+    // Process data
+    uint32_t offset = hdr->data_offset;
+    uint32_t data_size = hdr->entry_offset - hdr->data_offset;
+    uint32_t data_count = data_size / (2 * hdr->data_record_size * sizeof_32(uint32_t));
+    if (data_size % (hdr->data_record_size * sizeof_32(uint32_t))) {
+        fprintf(stderr, "ERROR: Computed data size is not a multiple of the record size.\n");
+        fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+        return NULL;
     }
-    json_object_set_value(json_object(json_sdp), "records", json_record_array);
+    if (data_count != hdr->data_count) {
+        fprintf(stderr, "ERROR: Computed data_count (%d) does not match actual value (%d).\n",
+            data_count, hdr->data_count);
+        fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+        return NULL;
+    }
+    JSON_Value* json_data_array = json_value_init_array();
+    JSON_Value* json_data_record_array = NULL;
+    for (uint32_t i = 0; i < data_size / hdr->data_record_size; ) {
+        if (json_data_record_array == NULL)
+            json_data_record_array = json_value_init_array();
+        json_array_append_number(json_array(json_data_record_array),
+            getle32(&buf[offset + i * sizeof_32(uint32_t)]));
+        i++;
+        if (i % hdr->data_record_size == 0) {
+            json_array_append_value(json_array(json_data_array), json_data_record_array);
+            json_data_record_array = NULL;
+        }
+    }
+    json_object_set_value(json_object(json_sdp), "data", json_data_array);
 
-    // Process extra data
-    uint32_t extra_data_size = (hdr->entrymap_offset == 0) ? hdr->entries_offset : min(hdr->entries_offset, hdr->entrymap_offset);
-    extra_data_size -= offset;
-    if (extra_data_size > 0) {
-        if (extra_data_size % sizeof_32(uint32_t)) {
-            fprintf(stderr, "ERROR: Extra data size (%d) is not a multiple of %d\n",
-                extra_data_size, sizeof_32(uint32_t));
+    // If we are an EntryMap, validate that it matches our expectations
+    if (strcmp(tag, known_sdp_tags[1]) == 0) {
+        if ((hdr->entry_count == 1 && hdr->entry_record_size != 4) ||
+            (hdr->entry_count > 1 && hdr->entry_record_size != 6)) {
+            fprintf(stderr, "ERROR: Unexpected EntryMap single entry size\n");
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
             json_value_free(json_sdp);
             return NULL;
         }
-        JSON_Value* json_extra_data_array = json_value_init_array();
-        for (uint32_t i = 0; i < extra_data_size; i += sizeof_32(uint32_t)) {
-            json_array_append_number(json_array(json_extra_data_array), getle32(&buf[offset + i]));
+        model_entry* me = (model_entry*)&buf[hdr->entry_offset];
+        if (hdr->entry_count > 1 && (me->has_submodel != 1 ||
+            me->submodel_count != hdr->entry_count - 1)) {
+            fprintf(stderr, "ERROR: Unexpected EntryMap submodel count\n");
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+            json_value_free(json_sdp);
+            return NULL;
         }
-        json_object_set_value(json_object(json_sdp), "extra_data", json_extra_data_array);
-    }
-
-    // Process entries
-    offset = hdr->entries_offset;
-    JSON_Value* json_entries_array = json_value_init_array();
-    for (uint32_t i = 0; i < hdr->num_entries; i++) {
-        JSON_Value* json_entry_data_array = json_value_init_array();
-        for (uint32_t j = 0; j < hdr->entry_size; j++)
-            json_array_append_number(json_array(json_entry_data_array),
-                getle32(&buf[offset + (i * hdr->entry_size + j) * sizeof_32(uint32_t)]));
-        json_array_append_value(json_array(json_entries_array), json_entry_data_array);
-    }
-    json_object_set_value(json_object(json_sdp), "entries", json_entries_array);
-
-    // Process optional entrymap
-    if (hdr->entrymap_offset != 0) {
-        JSON_Value* json_entrymap = read_sdp(&buf[hdr->entrymap_offset], hdr->size - hdr->entrymap_offset);
-        if (json_entrymap != NULL) {
-            const char* em_tag = json_object_get_string(json_object(json_entrymap), "tag");
-            if (strcmp(em_tag, "EntryMap") != 0) {
-                fprintf(stderr, "ERROR: Unexpected EntryMap tag '%s'\n", em_tag);
-                json_value_free(json_entrymap);
+        for (uint32_t i = 1; i < hdr->entry_count; i++) {
+            me = (model_entry*)&buf[hdr->entry_offset + (i * hdr->entry_record_size * sizeof_32(uint32_t))];
+            if (me->has_submodel != 1 || me->submodel_count != 0xffffffff) {
+                fprintf(stderr, "ERROR: More than one level of EntryMap submodels\n");
+                fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                 json_value_free(json_sdp);
                 return NULL;
             }
-            json_object_set_value(json_object(json_sdp), "entrymap", json_entrymap);
         }
+    }
+
+    // Process optional EntryMap SDP
+    if (hdr->entrymap_offset != 0) {
+        JSON_Value* json_entrymap = read_sdp(&buf[hdr->entrymap_offset], hdr->size - hdr->entrymap_offset);
+        if (json_entrymap == NULL) {
+            json_value_free(json_sdp);
+            return NULL;
+        }
+        const char* em_tag = json_object_get_string(json_object(json_entrymap), "tag");
+        if (strcmp(em_tag, known_sdp_tags[1]) != 0) {
+            fprintf(stderr, "ERROR: Unexpected EntryMap tag '%s'\n", em_tag);
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+            json_value_free(json_entrymap);
+            json_value_free(json_sdp);
+            return NULL;
+        }
+        json_object_set_value(json_object(json_sdp), "SDP", json_entrymap);
 
         // Validate the EntryMap and look for the NameMap
-        if (hdr->num_entries != 1 || hdr->entry_size < sizeof_32(root_entry) / sizeof_32(uint32_t)) {
-            fprintf(stderr, "ERROR: Unexpected entry data for the root SDP\n");
+        if (hdr->entry_count != 1 || hdr->entry_record_size < sizeof_32(root_entry) / sizeof_32(uint32_t)) {
+            fprintf(stderr, "ERROR: Unexpected entry data for a root SDP\n");
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
             json_value_free(json_sdp);
             return NULL;
         }
 
-        root_entry* gmpk_root = (root_entry*)&buf[hdr->entries_offset];
+        root_entry* gmpk_root = (root_entry*)&buf[hdr->entry_offset];
         if (gmpk_root->entrymap_offset != hdr->entrymap_offset) {
             fprintf(stderr, "ERROR: EntryMap position mismatch\n");
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
             json_value_free(json_sdp);
             return NULL;
         }
@@ -246,6 +311,7 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
         // Process the NameMap
         if (hdr->size - gmpk_root->namemap_offset < gmpk_root->namemap_size) {
             fprintf(stderr, "ERROR: NameMap size is too small\n");
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
             json_value_free(json_sdp);
             return NULL;
         }
@@ -256,7 +322,7 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
             return NULL;
         }
 
-        json_object_set_value(json_object(json_sdp), "namemap", json_nid);
+        json_object_set_value(json_object(json_sdp), "NID", json_nid);
     }
 
     return json_sdp;
@@ -281,15 +347,13 @@ uint16_t get_fragment(uint8_t* fragments, uint16_t *fragments_size, char* str, u
     return pos;
 }
 
-// TODO: validate that namemap and entrymap count are the same
 uint32_t write_nid(JSON_Object* json_nid, uint8_t* buf, uint32_t size)
 {
     uint32_t *data, written = 0;
     nid1_header* hdr = (nid1_header*)buf;
 
-    if (json_nid == NULL || buf == NULL || align_to_16(size) != size ||
-        size < sizeof_32(nid1_header)) {
-        fprintf(stderr, "ERROR: Invalid write_nid() parameters\n");
+    if (json_nid == NULL || buf == NULL || size < sizeof_32(nid1_header)) {
+        fprintf(stderr, "ERROR: Invalid NID parameters\n");
         return 0;
     }
 
@@ -297,25 +361,19 @@ uint32_t write_nid(JSON_Object* json_nid, uint8_t* buf, uint32_t size)
     written = sizeof_32(nid1_header);
     const char* tag = json_object_get_string(json_nid, "tag");
     const char* type = json_object_get_string(json_nid, "type");
-    if (tag == NULL || type == NULL || strcmp(type, "NID1") != 0) {
-        fprintf(stderr, "ERROR: Malformed or missing NameMap data\n");
+    if (tag == NULL || type == NULL || strcmp(type, "NID1") != 0 ||
+        strcmp(tag, known_nid_tags[0]) != 0) {
+        fprintf(stderr, "ERROR: Malformed or missing NID data\n");
         return 0;
     }
     memcpy(hdr->tag, tag, strlen(tag));
     hdr->magic = NID1_LE_MAGIC;
-    hdr->size = json_object_get_uint32(json_nid, "size");
-    if (hdr->size < sizeof_32(nid1_header) || hdr->size > size) {
-        fprintf(stderr, "ERROR: Improper NameMap size\n");
-        return 0;
-    }
-
-    JSON_Array* json_names_array = json_object_get_array(json_nid, "names");
-
-    hdr->count = (uint32_t)json_array_get_count(json_names_array);
     hdr->max_name_len = 0;
 
-    if (hdr->size < sizeof_32(nid1_header) + 3 * hdr->count * sizeof_32(uint32_t)) {
-        fprintf(stderr, "ERROR: NameMap buffer is to small to insert data\n");
+    JSON_Array* json_names_array = json_object_get_array(json_nid, "names");
+    hdr->count = (uint32_t)json_array_get_count(json_names_array);
+    if (size < sizeof_32(nid1_header) + 3 * hdr->count * sizeof_32(uint32_t)) {
+        fprintf(stderr, "ERROR: NID buffer is to small\n");
         return 0;
     }
 
@@ -330,7 +388,11 @@ uint32_t write_nid(JSON_Object* json_nid, uint8_t* buf, uint32_t size)
         data[2 * i + 1] = json_object_get_uint32(json_name, "flags");
         split = json_object_get_uint32(json_name, "split");
         char c, *name = strdup(json_object_get_string(json_name, "name"));
+        if (name == NULL)
+            return 0xffff;
         len = (uint32_t)strlen(name);
+        if (split == 0)
+            split = len;
         assert(name && split <= len);
         hdr->max_name_len = max(hdr->max_name_len, len);
         c = name[split];
@@ -345,139 +407,116 @@ uint32_t write_nid(JSON_Object* json_nid, uint8_t* buf, uint32_t size)
     }
     written += 3 * hdr->count * sizeof_32(uint32_t) + fragments_size;
     written = align_to_4(written);
-    if (written != hdr->size) {
-        fprintf(stderr, "ERROR: Reconstructed NameMap does not match original size.\n");
-        fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
-        return 0;
-    }
+    hdr->size = written;
     return written;
 }
 
 uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
 {
-    spd1_header* hdr = (spd1_header*)buf;
+    sdp1_header* hdr = (sdp1_header*)buf;
     uint32_t* data, written = 0;
 
-    if (json_sdp == NULL || buf == NULL || align_to_16(size) != size ||
-        size < sizeof_32(spd1_header)) {
-        fprintf(stderr, "ERROR: Invalid write_spd() parameters\n");
+    if (json_sdp == NULL || buf == NULL || size < sizeof_32(sdp1_header)) {
+        fprintf(stderr, "ERROR: Invalid SDP parameters\n");
         return 0;
     }
 
     // Write the header
-    written = sizeof_32(spd1_header);
+    written = sizeof_32(sdp1_header);
     const char* tag = json_object_get_string(json_sdp, "tag");
     const char* type = json_object_get_string(json_sdp, "type");
-    if (tag == NULL || type == NULL || strcmp(type, "SPD1") != 0) {
-        fprintf(stderr, "ERROR: Malformed or missing SDP1 data\n");
+    if (tag == NULL || type == NULL || strcmp(type, "SDP1") != 0) {
+        fprintf(stderr, "ERROR: Malformed or missing SDP data\n");
         return 0;
     }
     memcpy(hdr->tag, tag, strlen(tag));
-    hdr->magic = SPD1_LE_MAGIC;
-    hdr->size = json_object_get_uint32(json_sdp, "size");
+    hdr->magic = SDP1_LE_MAGIC;
 
-    // Write the records
-    hdr->records_offset = written;
+    // Write the data records
+    hdr->data_offset = written;
     data = (uint32_t*)&buf[written];
-    JSON_Array* json_records_array = json_object_get_array(json_sdp, "records");
-    if (json_records_array == NULL || json_array_get_count(json_records_array) % 2) {
-        fprintf(stderr, "ERROR: Malformed or missing SPD1 records data\n");
+    JSON_Array* json_data_array = json_object_get_array(json_sdp, "data");
+    if (json_array_get_count(json_data_array) == 0) {
+        fprintf(stderr, "ERROR: Missing or malformed SDP data\n");
         return 0;
     }
-    hdr->num_records = (uint32_t)json_array_get_count(json_records_array) / 2;
-    hdr->record_size = (uint32_t)json_array_get_count(json_array_get_array(json_records_array, 0));
-    written += 2 * hdr->num_records * hdr->record_size * sizeof_32(uint32_t);
+    hdr->data_count = (uint32_t)json_array_get_count(json_data_array) / 2;
+    hdr->data_record_size = (uint32_t)json_array_get_count(json_array_get_array(json_data_array, 0));
+    written += (uint32_t)json_array_get_count(json_data_array) * hdr->data_record_size * sizeof_32(uint32_t);
     written = align_to_16(written);
     if (written > size) {
-        fprintf(stderr, "ERROR: SDP1 buffer is to small to insert records\n");
+        fprintf(stderr, "ERROR: SDP buffer is to small\n");
         return 0;
     }
-    for (uint32_t i = 0; i < hdr->num_records * 2; i++) {
-        JSON_Array* json_record_data = json_array_get_array(json_records_array, i);
-        for (uint32_t j = 0; j < hdr->record_size; j++) {
-            data[i * hdr->record_size + j] = json_array_get_uint32(json_record_data, j);
-        }
+    for (uint32_t i = 0; i < (uint32_t)json_array_get_count(json_data_array); i++) {
+        JSON_Array* json_data_record_array = json_array_get_array(json_data_array, i);
+        for (uint32_t j = 0; j < hdr->data_record_size; j++)
+            data[i * hdr->data_record_size + j] = json_array_get_uint32(json_data_record_array, j);
     }
 
-    // Write the (optional) extra data
-    data = (uint32_t*)&buf[written];
-    JSON_Array* json_extra_data = json_object_get_array(json_sdp, "extra_data");
-    if (json_extra_data != NULL) {
-        written += (uint32_t)json_array_get_count(json_extra_data) * sizeof_32(uint32_t);
+    // Write the entry data
+    hdr->entry_offset = written;
+    if (strncmp(tag, "GMPK", 4) == 0) {
+        // Allocate space for the root entry
+        root_entry* gmpk_root = (root_entry*)&buf[hdr->entry_offset];
+        hdr->entry_count = 1;
+        hdr->entry_record_size = sizeof_32(root_entry) / sizeof_32(uint32_t);
+        written += sizeof_32(root_entry);
         written = align_to_16(written);
         if (written > size) {
-            fprintf(stderr, "ERROR: SDP1 buffer is to small to insert extra data\n");
+            fprintf(stderr, "ERROR: SDP buffer is to small\n");
             return 0;
         }
-        for (uint32_t i = 0; i < (uint32_t)json_array_get_count(json_extra_data); i++)
-            data[i] = json_array_get_uint32(json_extra_data, i);
-    }
-
-    // Write the entries
-    hdr->entries_offset = written;
-    data = (uint32_t*)&buf[written];
-    JSON_Array* json_entries_array = json_object_get_array(json_sdp, "entries");
-    if (json_entries_array == NULL) {
-        fprintf(stderr, "ERROR: JSON SPD1 data is missing an entries array\n");
-        return 0;
-    }
-    hdr->num_entries = (uint32_t)json_array_get_count(json_entries_array);
-    hdr->entry_size = (uint32_t)json_array_get_count(json_array_get_array(json_entries_array, 0));
-    written += hdr->num_entries * hdr->entry_size * sizeof_32(uint32_t);
-    written = align_to_16(written);
-    if (written > size) {
-        fprintf(stderr, "ERROR: SDP1 buffer is to small to insert entries\n");
-        return 0;
-    }
-    for (uint32_t i = 0; i < hdr->num_entries; i++) {
-        JSON_Array* json_entry_data = json_array_get_array(json_entries_array, i);
-        for (uint32_t j = 0; j < hdr->entry_size; j++) {
-            data[i * hdr->entry_size + j] = json_array_get_uint32(json_entry_data, j);
+        gmpk_root->entrymap_offset = written;
+        JSON_Object* json_entrymap = json_object_get_object(json_sdp, "SDP");
+        if (json_entrymap == NULL) {
+            fprintf(stderr, "ERROR: EntryMap is missing from root SDP\n");
+            return 0;
         }
-    }
-
-    // Write the (optional) EntryMap and NameMap
-    JSON_Object* json_entrymap = json_object_get_object(json_sdp, "entrymap");
-    if (json_entrymap != NULL) {
         uint32_t w = 0;
-        hdr->entrymap_offset = written;
         if ((w = write_sdp(json_entrymap, &buf[written], size - written)) == 0)
             return 0;
+        hdr->entrymap_offset = written;
         written = align_to_16(written + w);
 
         // An EntryMap should be followed by a NameMap
-        // The previous write_sdp() call made sure that the offset is aligned
-        JSON_Object* json_namemap = json_object_get_object(json_sdp, "namemap");
+        gmpk_root->namemap_offset = written;
+        JSON_Object* json_namemap = json_object_get_object(json_sdp, "NID");
+        if (json_namemap == NULL) {
+            fprintf(stderr, "ERROR: NameMap is missing from root SDP\n");
+            return 0;
+        }
         if ((w = write_nid(json_namemap, &buf[written], size - written)) == 0)
             return 0;
+        nid1_header* nid_hdr = (nid1_header*)&buf[written];
         written = align_to_16(written + w);
+        gmpk_root->namemap_size = nid_hdr->size;
+        gmpk_root->unknown1 = 1;
+        gmpk_root->files_count = files_count;
+        gmpk_root->unknown2 = 1;
+        gmpk_root->max_name_len = nid_hdr->max_name_len;
 
-        // Validate the root entry data
-        root_entry* gmpk_root = (root_entry*)&buf[hdr->entries_offset];
-        if (getle32(&buf[gmpk_root->entrymap_offset + 8]) != SPD1_LE_MAGIC) {
-            fprintf(stderr, "ERROR: EntryMap offset mismatch\n");
+        assert(getle32(&buf[gmpk_root->entrymap_offset + 8]) == SDP1_LE_MAGIC);
+        assert(getle32(&buf[gmpk_root->namemap_offset + 8]) == NID1_LE_MAGIC);
+        assert(getle32(&buf[gmpk_root->namemap_offset + 12]) == gmpk_root->namemap_size);
+        assert(getle32(&buf[gmpk_root->namemap_offset + 20]) == gmpk_root->max_name_len);
+    } else if (strcmp(tag, "EntryMap") == 0) {
+        // Process EntryMap
+        hdr->entry_record_size = (entry_data_count > 4) ? 6 : 4;
+        hdr->entry_count = entry_data_count / hdr->entry_record_size;
+        written += entry_data_count * sizeof_32(uint32_t);
+        written = align_to_16(written);
+        if (written > size) {
+            fprintf(stderr, "ERROR: SDP buffer is to small\n");
             return 0;
         }
-        if (getle32(&buf[gmpk_root->namemap_offset + 8]) != NID1_LE_MAGIC) {
-            fprintf(stderr, "ERROR: NameMap offset mismatch\n");
-            return 0;
-        }
-        if (getle32(&buf[gmpk_root->namemap_offset + 12]) != gmpk_root->namemap_size) {
-            fprintf(stderr, "ERROR: NameMap size mismatch\n");
-            return 0;
-        }
-        if (getle32(&buf[gmpk_root->namemap_offset + 20]) != gmpk_root->max_name_len) {
-            fprintf(stderr, "ERROR: NameMap max name length mismatch\n");
-            return 0;
-        }
-    }
-
-    if (written != hdr->size) {
-        fprintf(stderr, "ERROR: Reconstructed SPD1 does not match original size.\n");
-        fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+        assert(entry_data != NULL);
+        memcpy(&buf[hdr->entry_offset], entry_data, entry_data_count * sizeof_32(uint32_t));
+    } else {
+        fprintf(stderr, "ERROR: Unsupported SDP tag '%s'\n", tag);
         return 0;
     }
-
+    hdr->size = written;
     return written;
 }
 
@@ -489,12 +528,12 @@ int main_utf8(int argc, char** argv)
     JSON_Value* json = NULL;
     FILE *file = NULL;
     uint8_t* buf = NULL;
-    uint32_t* offset_table = NULL;
     bool list_only = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'l');
+    bool no_prompt = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'y');
 
-    if ((argc != 2) && !list_only) {
+    if ((argc != 2) && !list_only && !no_prompt) {
         printf("%s %s (c) 2021 VitaSmith\n\n"
-            "Usage: %s [-l] <file or directory>\n\n"
+            "Usage: %s [-l] [-y] <file or directory>\n\n"
             "Extracts (file) or recreates (directory) a Gust .gmpk model pack.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
             "is being overwritten for the first time.\n",
@@ -503,6 +542,7 @@ int main_utf8(int argc, char** argv)
     }
 
     if (!is_directory(argv[argc - 1])) {
+        // Unpack a GMPK
         printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", argv[argc - 1]);
         size_t len = strlen(argv[argc - 1]);
         if ((len < 5) || (argv[argc - 1][len - 5] != '.') || (argv[argc - 1][len - 4] != 'g') ||
@@ -551,28 +591,27 @@ int main_utf8(int argc, char** argv)
         if (json_gmpk == NULL)
             goto out;
 
-        json_object_set_value(json_object(json), "gmpk", json_gmpk);
+        json_object_set_value(json_object(json), "SDP", json_gmpk);
 
-        uint32_t offset = ((uint32_t*)buf)[3];
+        sdp1_header* gmpk_sdp = (sdp1_header*)buf;
+        assert(gmpk_sdp->entrymap_offset != 0);
+        sdp1_header* entrymap_sdp = (sdp1_header*)&buf[gmpk_sdp->entrymap_offset];
+        assert(entrymap_sdp->entry_record_size >= 4);
+        uint32_t* fp = (uint32_t*)&buf[gmpk_sdp->entrymap_offset + entrymap_sdp->entry_offset];
+        uint32_t offset = gmpk_sdp->size;
         file_entry* fe = (file_entry*)&buf[offset];
-
-        JSON_Array* json_entries = json_object_dotget_array(json_object(json_gmpk), "entrymap.entries");
-        JSON_Array* json_names = json_object_dotget_array(json_object(json_gmpk), "namemap.names");
-        if (json_entries == NULL || json_array_get_count(json_entries) == 0 ||
-            json_names == NULL || json_array_get_count(json_names) == 0 ||
-            json_array_get_count(json_entries) != json_array_get_count(json_names)) {
-            fprintf(stderr, "ERROR: Failed to process EntryMap/NameMap\n");
+        JSON_Array* json_names = json_object_dotget_array(json_object(json_gmpk), "NID.names");
+        if (json_array_get_count(json_names) == 0) {
+            fprintf(stderr, "ERROR: NID names array was not found\n");
             goto out;
         }
 
         printf("OFFSET   SIZE     NAME\n");
-        for (size_t i = 0; i < json_array_get_count(json_entries); i++) {
+        for (uint32_t i = 0; i < entrymap_sdp->entry_count; i++, fp = &fp[entrymap_sdp->entry_record_size]) {
             const char* name = json_object_get_string(json_array_get_object(json_names, i), "name");
-            JSON_Array* json_entry_data = json_array_get_array(json_entries, i);
-            assert(json_array_get_count(json_entry_data) >= 4);
-            for (size_t j = 0; j < 2; j++) {
-                if (json_array_get_uint32(json_entry_data, 2 * j) & ENTRY_FLAG_HAS_G1X) {
-                    uint32_t index = json_array_get_uint32(json_entry_data, 2 * j + 1);
+            for (uint32_t j = 0; j < 2; j++) {
+                if (fp[2 * j] & ENTRY_FLAG_HAS_G1X) {
+                    uint32_t index = fp[2 * j + 1];
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                        _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                     // Sanity checks
@@ -606,6 +645,7 @@ int main_utf8(int argc, char** argv)
 
         r = 0;
     } else {
+        // Create a GMPK
         if (list_only) {
             fprintf(stderr, "ERROR: Option -l is not supported when creating an archive\n");
             goto out;
@@ -643,84 +683,108 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Can't create file '%s'\n", path);
             goto out;
         }
-
-        JSON_Object* json_gmpk = json_object_get_object(json_object(json), "gmpk");
-        if (json_gmpk == NULL) {
-            fprintf(stderr, "ERROR: Missing JSON GMPK element\n");
-            goto out;
-        }
-
-        uint32_t header_size = json_object_get_uint32(json_gmpk, "size");
-        if (header_size < MIN_HEADER_SIZE) {
-            fprintf(stderr, "ERROR: GMPK header size is too small (%d)\n", header_size);
-            goto out;
-        }
-
-        JSON_Array* json_entries = json_object_dotget_array(json_gmpk, "entrymap.entries");
-        JSON_Array* json_names = json_object_dotget_array(json_gmpk, "namemap.names");
-        if (json_entries == NULL || json_array_get_count(json_entries) == 0 ||
-            json_names == NULL || json_array_get_count(json_names) == 0 ||
-            json_array_get_count(json_entries) != json_array_get_count(json_names)) {
-            fprintf(stderr, "ERROR: Invalid EntryMap/NameMap JSON entries\n");
-            goto out;
-        }
-
-        uint32_t num_files = json_array_get_uint32(json_array_get_array(json_object_get_array(json_gmpk, "entries"), 0), 4);
-        uint32_t fe_size = align_to_16((num_files + 1) * (uint32_t)sizeof(file_entry));
-        // Add space for the file entry header
-        buf = calloc((size_t)header_size + fe_size, 1);
-        if (buf == NULL)
-            goto out;
-
-        if (write_sdp(json_gmpk, buf, header_size) == 0)
-            goto out;
-
-        file_entry* fe = (file_entry*)&buf[header_size];
-
-        // We will fill the file offsets/size later
-        fwrite(buf, 1, (size_t)header_size + fe_size, file);
-
-        printf("OFFSET   SIZE     NAME\n");
         dir = strdup(argv[argc - 1]);
         if (dir == NULL) {
             fprintf(stderr, "ERROR: Alloc error\n");
             goto out;
         }
         dir[get_trailing_slash(dir)] = 0;
+
+        JSON_Object* json_gmpk = json_object_get_object(json_object(json), "SDP");
+        if (json_gmpk == NULL) {
+            fprintf(stderr, "ERROR: Missing JSON root SDP element\n");
+            goto out;
+        }
+
+        // Create the EntryMap entry data
+        JSON_Array* json_names_array = json_object_dotget_array(json_gmpk, "NID.names");
+        uint32_t names_count = (uint32_t)json_array_get_count(json_names_array);
+        if (names_count == 0 || names_count > MAX_NAMES_COUNT) {
+            fprintf(stderr, "ERROR: Invalid/missing NID JSON data\n");
+            goto out;
+        }
+        // Count the number of files we have available
+        files_count = 0;
+        entry_data_count = 0;
+        entry_data = calloc(names_count * sizeof(model_entry), 1);
+        if (entry_data == NULL)
+            goto out;
+        // Note: We expect the EntryMap entry data to be as follows:
+        // If we only have one set of .g1m/.g1t, there is a single model_entry record
+        // of size 4 since there are no submodels.
+        // If we have more than one set of .g1m/.g1t, we assume that the first one
+        // is the main model, with all the other files being its direct descendents.
+        // In that case, all the model_entry records are of size 6.
+        for (size_t i = 0; i < json_array_get_count(json_names_array); i++) {
+            const char* name = json_object_get_string(json_array_get_object(json_names_array, i), "name");
+            model_entry* me = (model_entry*)&entry_data[entry_data_count];
+            for (int j = 0; j < 2; j++) {
+                snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
+                    _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
+                if (is_file(path)) {
+                    me->component[j].has_component = 1;
+                    me->component[j].file_index = files_count++;
+                }
+            }
+            if (names_count > 1) {
+                me->has_submodel = 1;
+                me->submodel_count = (i == 0) ? names_count - 1 : 0xffffffff;
+            }
+            entry_data_count += (names_count > 1) ? 6 : 4;
+        }
+
+        // Now create the SDP header
+        buf = calloc(MAX_HEADER_SIZE, 1);
+        if (buf == NULL)
+            goto out;
+        uint32_t header_size = write_sdp(json_gmpk, buf, MAX_HEADER_SIZE);
+        if (header_size == 0)
+            goto out;
+
+        // Create the file entry data section (we will fill the offsets/sizes later)
+        file_entry* feds = (file_entry*)&buf[header_size];
+        uint32_t feds_size = align_to_16((files_count + 1) * (uint32_t)sizeof(file_entry));
+        fwrite(buf, 1, (size_t)header_size + feds_size, file);
+
+        // Add file content to the GMPK
+        printf("OFFSET   SIZE     NAME\n");
+        uint32_t index = 0;
         uint8_t padding_buf[0x10] = { 0 };
-        for (size_t i = 0; i < json_array_get_count(json_entries); i++) {
-            const char* name = json_object_get_string(json_array_get_object(json_names, i), "name");
-            JSON_Array* json_entry_data = json_array_get_array(json_entries, i);
-            assert(json_array_get_count(json_entry_data) >= 4);
+        for (size_t i = 0; i < json_array_get_count(json_names_array); i++) {
+            const char* name = json_object_get_string(json_array_get_object(json_names_array, i), "name");
             for (size_t j = 0; j < 2; j++) {
-                if (json_array_get_uint32(json_entry_data, 2 * j) & ENTRY_FLAG_HAS_G1X) {
-                    uint32_t index = json_array_get_uint32(json_entry_data, 2 * j + 1);
+                snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
+                    _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
+                if (is_file(path)) {
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                         _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
-                    uint8_t* sb = NULL;
-                    fe[index].offset = ftell(file) - header_size;
-                    assert(fe[index].offset % 0x10 == 0);
-                    fe[index].size = read_file(path, &sb);
-                    if (fe[index].size == UINT32_MAX)
+                    uint8_t* src_buf = NULL;
+                    feds[index].offset = ftell(file) - header_size;
+                    assert(feds[index].offset % 0x10 == 0);
+                    feds[index].size = read_file(path, &src_buf);
+                    if (feds[index].size == UINT32_MAX)
                         goto out;
-                    printf("%08x %08x %s%s\n", (uint32_t)ftell(file), fe[index].size, name, extension[j]);
-                    if (fwrite(sb, 1, fe[index].size, file) != fe[index].size) {
+                    printf("%08x %08x %s%s\n", (uint32_t)ftell(file), feds[index].size, name, extension[j]);
+                    if (fwrite(src_buf, 1, feds[index].size, file) != feds[index].size) {
                         fprintf(stderr, "ERROR: Can't add data from '%s'\n", path);
-                        free(sb);
+                        free(src_buf);
                         goto out;
                     }
-                    free(sb);
+                    free(src_buf);
                     // Pad to 16 bytes
-                    if (fe[index].size % 0x10 != 0)
-                        fwrite(padding_buf, 1, 0x10 - (fe[index].size % 0x10), file);
+                    if (feds[index].size % 0x10 != 0)
+                        fwrite(padding_buf, 1, 0x10 - (feds[index].size % 0x10), file);
+                    index++;
                 }
             }
         }
-        fe[num_files].offset = ftell(file);
-        assert(fe[num_files].offset % 0x10 == 0);
+
+        // Now overwrite the file entry data
+        feds[files_count].offset = ftell(file);
+        assert(feds[files_count].offset % 0x10 == 0);
         fseek(file, header_size, SEEK_SET);
-        if (fwrite(fe, 1, fe_size, file) != fe_size) {
-            fprintf(stderr, "ERROR: Can't write file entry data\n");
+        if (fwrite(feds, 1, feds_size, file) != feds_size) {
+            fprintf(stderr, "ERROR: Can't write file entry data section\n");
             goto out;
         }
         r = 0;
@@ -730,11 +794,11 @@ out:
     json_value_free(json);
     free(buf);
     free(dir);
-    free(offset_table);
+    free(entry_data);
     if (file != NULL)
         fclose(file);
 
-    if (r != 0) {
+    if (r != 0 && !no_prompt) {
         fflush(stdin);
         printf("\nPress any key to continue...");
         (void)getchar();
