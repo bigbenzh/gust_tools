@@ -40,7 +40,7 @@ for %%a in (%list%) do (
   if exist %%a.%EXT% (
     gust_%EXT%.exe -y %%a.%EXT% >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err
-    gust_%EXT%.exe %%a >NUL 2>&1
+    gust_%EXT%.exe -y %%a >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err
     fc /b %%a.%EXT% %%a.%EXT%.bak >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err

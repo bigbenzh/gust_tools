@@ -10,6 +10,8 @@ call build.cmd %EXT%
 if %ERRORLEVEL% neq 0 goto err
 
 set list=^
+  G_HAK_A^
+  G_KAG_D^
   H_KYO_A^
   H_MIU_A^
   H_MIU_S^
@@ -26,7 +28,7 @@ for %%a in (%list%) do (
   if exist %%a.%EXT% (
     gust_%EXT%.exe -y %%a.%EXT% >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err
-    gust_%EXT%.exe %%a >NUL 2>&1
+    gust_%EXT%.exe -y %%a >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err
     fc.exe /b %%a.%EXT% %%a.%EXT%.bak >NUL 2>&1
     if !ERRORLEVEL! neq 0 goto err

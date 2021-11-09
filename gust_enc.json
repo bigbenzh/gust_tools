@@ -123,7 +123,7 @@
             ],
             "fence": 0x0ab5
         },
-        {   // Atelier Ryza (A21) and Atelier Ryza 2 (A22) use the same seeds
+        {   // Atelier Ryza (A21), Atelier Ryza 2 (A22) and Blue Reflection: Second Light
             "id": "A21",
             "name": "Atelier Ryza",
             "version": 2,
@@ -186,7 +186,7 @@
             ],
             "fence": 0x09a9
         },
-        {
+        {   // Note: "Blue Reflection: Second Light" uses the same seed as A21
             "id": "BR",
             "name": "Blue Reflection",
             "version": 2,

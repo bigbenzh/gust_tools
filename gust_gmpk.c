@@ -42,6 +42,21 @@
 #define MAX_NAMES_COUNT         0x100
 #define REPORT_URL              "https://github.com/VitaSmith/gust_tools/issues"
 
+static const char* known_sdp_tags[] = {
+    "GMPK1.1",
+    "EntryMap",
+};
+
+static const char* known_nid_tags[] = {
+    "NameMap",
+};
+
+static const char* extension[] = {
+    ".g1m",
+    ".g1t",
+    ".g1h"
+};
+
 #pragma pack(push, 1)
 // Structure Packed Data, Type 1
 typedef struct {
@@ -52,6 +67,7 @@ typedef struct {
     uint32_t    data_record_size; // Size of a data record, in 32-bit words
     uint32_t    entry_count;    // total number of entries
     uint32_t    entry_record_size; // Size of an entry record, in 32-bit words
+                                // For an EntryMap this seems to be data_count * 2
     uint32_t    data_offset;
     uint32_t    entry_offset;
     uint32_t    unknown_offset;
@@ -92,10 +108,7 @@ typedef struct {
 } model_component;
 
 typedef struct {
-    model_component component[2];
-    // The following are only present if we have submodels
-    uint32_t    has_submodel;
-    uint32_t    submodel_count;
+    model_component component[array_size(extension) + 1];
 } model_entry;
 
 // Structure of a packed data file entry header
@@ -106,16 +119,7 @@ typedef struct {
 
 #pragma pack(pop)
 
-const char* known_sdp_tags[] = {
-    "GMPK1.1",
-    "EntryMap",
-};
-
-const char* known_nid_tags[] = {
-    "NameMap",
-};
-
-static uint32_t *entry_data = NULL, entry_data_count, files_count;
+static uint32_t *entry_data = NULL, entry_data_size, entry_data_count, files_count;
 
 JSON_Value* read_nid(uint8_t* buf, uint32_t size)
 {
@@ -249,16 +253,15 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
 
     // If we are an EntryMap, validate that it matches our expectations
     if (strcmp(tag, known_sdp_tags[1]) == 0) {
-        if ((hdr->entry_count == 1 && hdr->entry_record_size != 4) ||
-            (hdr->entry_count > 1 && hdr->entry_record_size != 6)) {
-            fprintf(stderr, "ERROR: Unexpected EntryMap single entry size\n");
+        if (hdr->entry_record_size != 2 * hdr->data_count) {
+            fprintf(stderr, "ERROR: Unexpected EntryMap record size\n");
             fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
             json_value_free(json_sdp);
             return NULL;
         }
         model_entry* me = (model_entry*)&buf[hdr->entry_offset];
-        if (hdr->entry_count > 1 && (me->has_submodel != 1 ||
-            me->submodel_count != hdr->entry_count - 1)) {
+        if (hdr->entry_count > 1 && (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
+            me->component[hdr->entry_record_size / 2 - 1].file_index != hdr->entry_count - 1)) {
             fprintf(stderr, "ERROR: Unexpected EntryMap submodel count\n");
             fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
             json_value_free(json_sdp);
@@ -266,7 +269,8 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
         }
         for (uint32_t i = 1; i < hdr->entry_count; i++) {
             me = (model_entry*)&buf[hdr->entry_offset + (i * hdr->entry_record_size * sizeof_32(uint32_t))];
-            if (me->has_submodel != 1 || me->submodel_count != 0xffffffff) {
+            if (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
+                me->component[hdr->entry_record_size / 2 - 1].file_index != 0xffffffff) {
                 fprintf(stderr, "ERROR: More than one level of EntryMap submodels\n");
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                 json_value_free(json_sdp);
@@ -301,6 +305,7 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
         }
 
         root_entry* gmpk_root = (root_entry*)&buf[hdr->entry_offset];
+        files_count = gmpk_root->files_count;
         if (gmpk_root->entrymap_offset != hdr->entrymap_offset) {
             fprintf(stderr, "ERROR: EntryMap position mismatch\n");
             fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
@@ -502,7 +507,7 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
         assert(getle32(&buf[gmpk_root->namemap_offset + 20]) == gmpk_root->max_name_len);
     } else if (strcmp(tag, "EntryMap") == 0) {
         // Process EntryMap
-        hdr->entry_record_size = (entry_data_count > 4) ? 6 : 4;
+        hdr->entry_record_size = 2 * entry_data_size;
         hdr->entry_count = entry_data_count / hdr->entry_record_size;
         written += entry_data_count * sizeof_32(uint32_t);
         written = align_to_16(written);
@@ -522,7 +527,6 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
 
 int main_utf8(int argc, char** argv)
 {
-    static const char* extension[2] = { ".g1m", ".g1t" };
     char path[256], *dir = NULL;
     int r = -1;
     JSON_Value* json = NULL;
@@ -545,9 +549,7 @@ int main_utf8(int argc, char** argv)
         // Unpack a GMPK
         printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", argv[argc - 1]);
         size_t len = strlen(argv[argc - 1]);
-        if ((len < 5) || (argv[argc - 1][len - 5] != '.') || (argv[argc - 1][len - 4] != 'g') ||
-            (argv[argc - 1][len - 3] != 'm') || (argv[argc - 1][len - 2] != 'p') ||
-            (argv[argc - 1][len - 1] != 'k')) {
+        if (len < 5 || stricmp(&argv[argc - 1][len - 5], ".gmpk") != 0) {
             fprintf(stderr, "ERROR: File should have a '.gmpk' extension\n");
             goto out;
         }
@@ -607,9 +609,17 @@ int main_utf8(int argc, char** argv)
         }
 
         printf("OFFSET   SIZE     NAME\n");
+        uint32_t extracted_files = 0, num_extensions_to_check = entrymap_sdp->entry_record_size / 2;
+        if (entrymap_sdp->entry_count > 1)
+            num_extensions_to_check -= 1;
+        if (num_extensions_to_check > array_size(extension)) {
+            fprintf(stderr, "ERROR: This archive includes unsupported G1X data\n");
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+            goto out;
+        }
         for (uint32_t i = 0; i < entrymap_sdp->entry_count; i++, fp = &fp[entrymap_sdp->entry_record_size]) {
             const char* name = json_object_get_string(json_array_get_object(json_names, i), "name");
-            for (uint32_t j = 0; j < 2; j++) {
+            for (uint32_t j = 0; j < num_extensions_to_check; j++) {
                 if (fp[2 * j] & ENTRY_FLAG_HAS_G1X) {
                     uint32_t index = fp[2 * j + 1];
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
@@ -619,8 +629,13 @@ int main_utf8(int argc, char** argv)
                         fprintf(stderr, "ERROR: Invalid file size or file offset\n");
                         goto out;
                     }
+                    if (index > files_count || extracted_files > files_count) {
+                        fprintf(stderr, "ERROR: Invalid index or number of files\n");
+                        goto out;
+                    }
                     printf("%08x %08x %s%s\n", offset + fe[index].offset,
                         fe[index].size, name, extension[j]);
+                    extracted_files++;
                     if (list_only)
                         continue;
                     FILE* dst = fopen_utf8(path, "wb");
@@ -636,6 +651,10 @@ int main_utf8(int argc, char** argv)
                     fclose(dst);
                 }
             }
+        }
+        if (extracted_files != files_count) {
+            fprintf(stderr, "ERROR: Some files were not extracted\n");
+            goto out;
         }
 
         if (!list_only) {
@@ -710,15 +729,21 @@ int main_utf8(int argc, char** argv)
         if (entry_data == NULL)
             goto out;
         // Note: We expect the EntryMap entry data to be as follows:
-        // If we only have one set of .g1m/.g1t, there is a single model_entry record
-        // of size 4 since there are no submodels.
-        // If we have more than one set of .g1m/.g1t, we assume that the first one
-        // is the main model, with all the other files being its direct descendents.
-        // In that case, all the model_entry records are of size 6.
+        // If we only have one set of .g1m/.g1t/.g1h, there is a single model_entry
+        // record of size 4 or 6 since there are no submodels.
+        // If we have more than one set of .g1x, we assume that the first one is
+        // the main model, with all the other files being its direct descendents.
+        // Also, rather than figure out how many separate extensions we have, we
+        // cheat by looking at the EntryMap number of records.
+        entry_data_size = (uint32_t)json_array_get_count(json_object_dotget_array(json_gmpk, "SDP.data")) / 2;
+        if (entry_data_size == 0 || entry_data_size > array_size(extension) + 1) {
+            fprintf(stderr, "ERROR: Invalid EntryMap data\n");
+            goto out;
+        }
         for (size_t i = 0; i < json_array_get_count(json_names_array); i++) {
             const char* name = json_object_get_string(json_array_get_object(json_names_array, i), "name");
             model_entry* me = (model_entry*)&entry_data[entry_data_count];
-            for (int j = 0; j < 2; j++) {
+            for (int j = 0; j < array_size(extension); j++) {
                 snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                     _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                 if (is_file(path)) {
@@ -727,10 +752,10 @@ int main_utf8(int argc, char** argv)
                 }
             }
             if (names_count > 1) {
-                me->has_submodel = 1;
-                me->submodel_count = (i == 0) ? names_count - 1 : 0xffffffff;
+                me->component[entry_data_size - 1].has_component = 1;
+                me->component[entry_data_size - 1].file_index = (i == 0) ? names_count - 1 : 0xffffffff;
             }
-            entry_data_count += (names_count > 1) ? 6 : 4;
+            entry_data_count += 2 * entry_data_size;
         }
 
         // Now create the SDP header
@@ -742,9 +767,9 @@ int main_utf8(int argc, char** argv)
             goto out;
 
         // Create the file entry data section (we will fill the offsets/sizes later)
-        file_entry* feds = (file_entry*)&buf[header_size];
-        uint32_t feds_size = align_to_16((files_count + 1) * (uint32_t)sizeof(file_entry));
-        fwrite(buf, 1, (size_t)header_size + feds_size, file);
+        file_entry* fe = (file_entry*)&buf[header_size];
+        uint32_t fe_size = align_to_16((files_count + 1) * (uint32_t)sizeof(file_entry));
+        fwrite(buf, 1, (size_t)header_size + fe_size, file);
 
         // Add file content to the GMPK
         printf("OFFSET   SIZE     NAME\n");
@@ -752,38 +777,38 @@ int main_utf8(int argc, char** argv)
         uint8_t padding_buf[0x10] = { 0 };
         for (size_t i = 0; i < json_array_get_count(json_names_array); i++) {
             const char* name = json_object_get_string(json_array_get_object(json_names_array, i), "name");
-            for (size_t j = 0; j < 2; j++) {
+            for (size_t j = 0; j < array_size(extension); j++) {
                 snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                     _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                 if (is_file(path)) {
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                         _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                     uint8_t* src_buf = NULL;
-                    feds[index].offset = ftell(file) - header_size;
-                    assert(feds[index].offset % 0x10 == 0);
-                    feds[index].size = read_file(path, &src_buf);
-                    if (feds[index].size == UINT32_MAX)
+                    fe[index].offset = ftell(file) - header_size;
+                    assert(fe[index].offset % 0x10 == 0);
+                    fe[index].size = read_file(path, &src_buf);
+                    if (fe[index].size == UINT32_MAX)
                         goto out;
-                    printf("%08x %08x %s%s\n", (uint32_t)ftell(file), feds[index].size, name, extension[j]);
-                    if (fwrite(src_buf, 1, feds[index].size, file) != feds[index].size) {
+                    printf("%08x %08x %s%s\n", (uint32_t)ftell(file), fe[index].size, name, extension[j]);
+                    if (fwrite(src_buf, 1, fe[index].size, file) != fe[index].size) {
                         fprintf(stderr, "ERROR: Can't add data from '%s'\n", path);
                         free(src_buf);
                         goto out;
                     }
                     free(src_buf);
                     // Pad to 16 bytes
-                    if (feds[index].size % 0x10 != 0)
-                        fwrite(padding_buf, 1, 0x10 - (feds[index].size % 0x10), file);
+                    if (fe[index].size % 0x10 != 0)
+                        fwrite(padding_buf, 1, 0x10 - (fe[index].size % 0x10), file);
                     index++;
                 }
             }
         }
 
         // Now overwrite the file entry data
-        feds[files_count].offset = ftell(file);
-        assert(feds[files_count].offset % 0x10 == 0);
+        fe[files_count].offset = ftell(file);
+        assert(fe[files_count].offset % 0x10 == 0);
         fseek(file, header_size, SEEK_SET);
-        if (fwrite(feds, 1, feds_size, file) != feds_size) {
+        if (fwrite(fe, 1, fe_size, file) != fe_size) {
             fprintf(stderr, "ERROR: Can't write file entry data section\n");
             goto out;
         }
