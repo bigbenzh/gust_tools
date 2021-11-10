@@ -784,7 +784,7 @@ int main_utf8(int argc, char** argv)
         for (size_t i = 0; i < json_array_get_count(json_names_array); i++) {
             const char* name = json_object_get_string(json_array_get_object(json_names_array, i), "name");
             model_entry* me = (model_entry*)&entry_data[entry_data_count];
-            for (int j = 0; j < array_size(extension); j++) {
+            for (size_t j = 0; j < array_size(extension); j++) {
                 snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                     _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                 if (is_file(path)) {

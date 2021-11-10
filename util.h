@@ -109,6 +109,7 @@ char* _dirname_unix(const char* path);
 #define _basename(path) _basename_unix(path)
 #define _appname(path) _basename_unix(path)
 #define _dirname(path) _dirname_unix(path)
+#define stricmp strcasecmp
 #endif
 
 #if defined (_MSC_VER)
