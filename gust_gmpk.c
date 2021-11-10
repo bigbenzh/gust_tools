@@ -29,8 +29,7 @@
 #include "dds.h"
 
 #define JSON_VERSION            2
-#define GMPK_LE_MAGIC           0x4B504D47  // 'GMPK'
-#define GMPK_BE_MAGIC           0x474D504B  // 'KPMG'
+#define GMPK_MAGIC              0x4B504D47  // 'GMPK'
 #define SDP1_LE_MAGIC           0x53445031  // '1PDS'
 #define SDP1_BE_MAGIC           0x31504453  // 'SDP1'
 #define NID1_LE_MAGIC           0x4E494431  // '1DIN'
@@ -123,16 +122,27 @@ static uint32_t *entry_data = NULL, entry_data_size, entry_data_count, files_cou
 JSON_Value* read_nid(uint8_t* buf, uint32_t size)
 {
     char tag[9] = { 0 };
-    if (getle32(&buf[8]) == NID1_BE_MAGIC) {
-        fprintf(stderr, "ERROR: Big-Endian GMPK files are not supported\n");
+    nid1_header* hdr = (nid1_header*)buf;
+    if (sizeof(nid1_header) > size) {
+        fprintf(stderr, "ERROR: NID buffer is too small\n");
         return NULL;
     }
-    if (getle32(&buf[8]) != NID1_LE_MAGIC) {
+    if (data_endianness != platform_endianness) {
+        BSWAP_UINT32(hdr->magic);
+        BSWAP_UINT32(hdr->size);
+        BSWAP_UINT32(hdr->count);
+        BSWAP_UINT32(hdr->max_name_len);
+    }
+    // Endianness should have been detected when processing the SDP
+    if (hdr->magic == NID1_BE_MAGIC) {
+        fprintf(stderr, "ERROR: NID endianness mismatch\n");
+        return NULL;
+    }
+    if (hdr->magic != NID1_LE_MAGIC) {
         fprintf(stderr, "ERROR: Bad NID magic\n");
         return NULL;
     }
-    nid1_header* hdr = (nid1_header*)buf;
-    if (size < sizeof(nid1_header) || hdr->size != size) {
+    if (hdr->size != size) {
         fprintf(stderr, "ERROR: NID size mismatch\n");
         return NULL;
     }
@@ -165,8 +175,12 @@ JSON_Value* read_nid(uint8_t* buf, uint32_t size)
         JSON_Value* json_name = json_value_init_object();
         json_object_set_number(json_object(json_name), "index", data[2 * i]);
         json_object_set_number(json_object(json_name), "flags", data[2 * i + 1]);
-        uint32_t k = 0, val = getle32(&data[2 * hdr->count + i]);
+        uint32_t k = 0, val = getv32(getle32(&data[2 * hdr->count + i]));
         uint8_t len = buf[offset + (val >> 16)];
+        if (len > hdr->max_name_len) {
+            fprintf(stderr, "ERROR: Fragment length (%d) is greater than %d.\n", len, hdr->max_name_len);
+            return NULL;
+        }
         for (size_t j = 1; j <= len; j++)
             str[k++] = buf[offset + (val >> 16) + j];
         json_object_set_number(json_object(json_name), "split", k);
@@ -186,16 +200,30 @@ JSON_Value* read_nid(uint8_t* buf, uint32_t size)
 JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
 {
     char tag[9] = { 0 };
-    if (getle32(&buf[8]) == SDP1_BE_MAGIC) {
-        fprintf(stderr, "ERROR: Big-Endian GMPK files are not supported\n");
+    sdp1_header* hdr = (sdp1_header*)buf;
+    if (sizeof(sdp1_header) > size) {
+        fprintf(stderr, "ERROR: SDP buffer is too small\n");
         return NULL;
     }
-    if (getle32(&buf[8]) != SDP1_LE_MAGIC) {
+    if (hdr->magic != SDP1_LE_MAGIC && hdr->magic != SDP1_BE_MAGIC) {
         fprintf(stderr, "ERROR: Bad SDP magic\n");
         return NULL;
     }
-    sdp1_header* hdr = (sdp1_header*)buf;
-    if (hdr->size < sizeof(sdp1_header) || hdr->size > size) {
+    if (getle32(&buf[8]) == SDP1_BE_MAGIC)
+        data_endianness = big_endian;
+    if (data_endianness != platform_endianness) {
+        BSWAP_UINT32(hdr->magic);
+        BSWAP_UINT32(hdr->size);
+        BSWAP_UINT32(hdr->data_count);
+        BSWAP_UINT32(hdr->data_record_size);
+        BSWAP_UINT32(hdr->entry_count);
+        BSWAP_UINT32(hdr->entry_record_size);
+        BSWAP_UINT32(hdr->data_offset);
+        BSWAP_UINT32(hdr->entry_offset);
+        BSWAP_UINT32(hdr->unknown_offset);
+        BSWAP_UINT32(hdr->entrymap_offset);
+    }
+    if (hdr->size > size) {
         fprintf(stderr, "ERROR: SDP size mismatch\n");
         return NULL;
     }
@@ -241,7 +269,7 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
         if (json_data_record_array == NULL)
             json_data_record_array = json_value_init_array();
         json_array_append_number(json_array(json_data_record_array),
-            getle32(&buf[offset + i * sizeof_32(uint32_t)]));
+            getv32(getle32(&buf[offset + i * sizeof_32(uint32_t)])));
         i++;
         if (i % hdr->data_record_size == 0) {
             json_array_append_value(json_array(json_data_array), json_data_record_array);
@@ -259,10 +287,10 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
             return NULL;
         }
         model_entry* me = (model_entry*)&buf[hdr->entry_offset];
-        if (me->component[0].has_component != 0) {
+        if (getle32(&me->component[0].has_component) == 1) {
             // Only check submodels if we actually have a model
-            if (hdr->entry_count > 1 && (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
-                me->component[hdr->entry_record_size / 2 - 1].file_index != hdr->entry_count - 1)) {
+            if (hdr->entry_count > 1 && (getle32(&(me->component[hdr->entry_record_size / 2 - 1].has_component)) != 1 ||
+                getle32(&(me->component[hdr->entry_record_size / 2 - 1].file_index)) != hdr->entry_count - 1)) {
                 fprintf(stderr, "ERROR: Unexpected EntryMap submodel count\n");
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                 json_value_free(json_sdp);
@@ -270,7 +298,7 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
             }
             for (uint32_t i = 1; i < hdr->entry_count; i++) {
                 me = (model_entry*)&buf[hdr->entry_offset + (i * hdr->entry_record_size * sizeof_32(uint32_t))];
-                if (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
+                if (getle32(&me->component[hdr->entry_record_size / 2 - 1].has_component) != 1 ||
                     me->component[hdr->entry_record_size / 2 - 1].file_index != 0xffffffff) {
                     fprintf(stderr, "ERROR: More than one level of EntryMap submodels\n");
                     fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
@@ -307,6 +335,15 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
         }
 
         root_entry* gmpk_root = (root_entry*)&buf[hdr->entry_offset];
+        if (data_endianness != platform_endianness) {
+            BSWAP_UINT32(gmpk_root->entrymap_offset);
+            BSWAP_UINT32(gmpk_root->namemap_offset);
+            BSWAP_UINT32(gmpk_root->namemap_size);
+            BSWAP_UINT32(gmpk_root->unknown1);
+            BSWAP_UINT32(gmpk_root->files_count);
+            BSWAP_UINT32(gmpk_root->unknown2);
+            BSWAP_UINT32(gmpk_root->max_name_len);
+        }
         files_count = gmpk_root->files_count;
         if (gmpk_root->entrymap_offset != hdr->entrymap_offset) {
             fprintf(stderr, "ERROR: EntryMap position mismatch\n");
@@ -561,11 +598,7 @@ int main_utf8(int argc, char** argv)
         if (file_size == UINT32_MAX)
             goto out;
 
-        if (getle32(buf) == GMPK_BE_MAGIC) {
-            fprintf(stderr, "ERROR: Big-Endian GMPK files are not supported\n");
-            goto out;
-        }
-        if (getle32(buf) != GMPK_LE_MAGIC) {
+        if (getle32(buf) != GMPK_MAGIC) {
             fprintf(stderr, "ERROR: Not a GMPK file (bad magic) or unsupported platform\n");
             goto out;
         }
@@ -595,6 +628,8 @@ int main_utf8(int argc, char** argv)
         if (json_gmpk == NULL)
             goto out;
 
+        if (data_endianness == big_endian)
+            json_object_set_boolean(json_object(json), "big_endian", true);
         json_object_set_value(json_object(json), "SDP", json_gmpk);
 
         sdp1_header* gmpk_sdp = (sdp1_header*)buf;
@@ -622,12 +657,14 @@ int main_utf8(int argc, char** argv)
         for (uint32_t i = 0; i < entrymap_sdp->entry_count; i++, fp = &fp[entrymap_sdp->entry_record_size]) {
             const char* name = json_object_get_string(json_array_get_object(json_names, i), "name");
             for (uint32_t j = 0; j < num_extensions_to_check; j++) {
-                if (fp[2 * j] == 1) {
-                    uint32_t index = fp[2 * j + 1];
+                if (getv32(getle32(&fp[2 * j])) == 1) {
+                    uint32_t index = getv32(getle32(&fp[2 * j + 1]));
+                    uint32_t fe_offset = getv32(getle32(&fe[index].offset));
+                    uint32_t fe_size = getv32(getle32(&fe[index].size));
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                        _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                     // Sanity checks
-                    if (offset + fe[index].size > file_size || offset + fe[index].offset > file_size) {
+                    if (offset + fe_size > file_size || offset + fe_offset > file_size) {
                         fprintf(stderr, "ERROR: Invalid file size or file offset\n");
                         goto out;
                     }
@@ -635,8 +672,7 @@ int main_utf8(int argc, char** argv)
                         fprintf(stderr, "ERROR: Invalid index or number of files\n");
                         goto out;
                     }
-                    printf("%08x %08x %s%s\n", offset + fe[index].offset,
-                        fe[index].size, name, extension[j]);
+                    printf("%08x %08x %s%s\n", offset + fe_offset, fe_size, name, extension[j]);
                     extracted_files++;
                     if (list_only)
                         continue;
@@ -645,7 +681,7 @@ int main_utf8(int argc, char** argv)
                         fprintf(stderr, "ERROR: Can't create file '%s'\n", path);
                         goto out;
                     }
-                    if (fwrite(&buf[offset + fe[index].offset], 1, fe[index].size, dst) != fe[index].size) {
+                    if (fwrite(&buf[offset + fe_offset], 1, fe_size, dst) != fe_size) {
                         fprintf(stderr, "ERROR: Can't write file '%s'\n", path);
                         fclose(dst);
                         goto out;
@@ -677,6 +713,11 @@ int main_utf8(int argc, char** argv)
         json = json_parse_file_with_comments(path);
         if (json == NULL) {
             fprintf(stderr, "ERROR: Can't parse JSON data from '%s'\n", path);
+            goto out;
+        }
+        if (json_object_get_boolean(json_object(json), "big_endian")) {
+            data_endianness = big_endian;
+            fprintf(stderr, "ERROR: Repacking of Big-Endian archives is not supported yet\n");
             goto out;
         }
         const uint32_t json_version = json_object_get_uint32(json_object(json), "json_version");

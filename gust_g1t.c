@@ -692,13 +692,13 @@ int main_utf8(int argc, char** argv)
 
         g1t_header* hdr = (g1t_header*)buf;
         if (data_endianness != platform_endianness) {
-            hdr->magic = bswap_uint32(hdr->magic);
-            hdr->version = bswap_uint32(hdr->version);
-            hdr->total_size = bswap_uint32(hdr->total_size);
-            hdr->header_size = bswap_uint32(hdr->header_size);
-            hdr->nb_textures = bswap_uint32(hdr->nb_textures);
-            hdr->platform = bswap_uint32(hdr->platform);
-            hdr->extra_size = bswap_uint32(hdr->extra_size);
+            BSWAP_UINT32(hdr->magic);
+            BSWAP_UINT32(hdr->version);
+            BSWAP_UINT32(hdr->total_size);
+            BSWAP_UINT32(hdr->header_size);
+            BSWAP_UINT32(hdr->nb_textures);
+            BSWAP_UINT32(hdr->platform);
+            BSWAP_UINT32(hdr->extra_size);
         }
         if (hdr->total_size != g1t_size) {
             fprintf(stderr, "ERROR: File size mismatch\n");
