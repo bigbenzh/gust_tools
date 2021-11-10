@@ -36,7 +36,6 @@
 #define NID1_LE_MAGIC           0x4E494431  // '1DIN'
 #define NID1_BE_MAGIC           0x3144494E  // 'NID1'
 #define EXPECTED_VERSION        0x00312E31
-#define ENTRY_FLAG_HAS_G1X      0x00000001
 #define MIN_HEADER_SIZE         0x100
 #define MAX_HEADER_SIZE         0x10000
 #define MAX_NAMES_COUNT         0x100
@@ -260,21 +259,24 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
             return NULL;
         }
         model_entry* me = (model_entry*)&buf[hdr->entry_offset];
-        if (hdr->entry_count > 1 && (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
-            me->component[hdr->entry_record_size / 2 - 1].file_index != hdr->entry_count - 1)) {
-            fprintf(stderr, "ERROR: Unexpected EntryMap submodel count\n");
-            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
-            json_value_free(json_sdp);
-            return NULL;
-        }
-        for (uint32_t i = 1; i < hdr->entry_count; i++) {
-            me = (model_entry*)&buf[hdr->entry_offset + (i * hdr->entry_record_size * sizeof_32(uint32_t))];
-            if (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
-                me->component[hdr->entry_record_size / 2 - 1].file_index != 0xffffffff) {
-                fprintf(stderr, "ERROR: More than one level of EntryMap submodels\n");
+        if (me->component[0].has_component != 0) {
+            // Only check submodels if we actually have a model
+            if (hdr->entry_count > 1 && (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
+                me->component[hdr->entry_record_size / 2 - 1].file_index != hdr->entry_count - 1)) {
+                fprintf(stderr, "ERROR: Unexpected EntryMap submodel count\n");
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                 json_value_free(json_sdp);
                 return NULL;
+            }
+            for (uint32_t i = 1; i < hdr->entry_count; i++) {
+                me = (model_entry*)&buf[hdr->entry_offset + (i * hdr->entry_record_size * sizeof_32(uint32_t))];
+                if (me->component[hdr->entry_record_size / 2 - 1].has_component != 1 ||
+                    me->component[hdr->entry_record_size / 2 - 1].file_index != 0xffffffff) {
+                    fprintf(stderr, "ERROR: More than one level of EntryMap submodels\n");
+                    fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+                    json_value_free(json_sdp);
+                    return NULL;
+                }
             }
         }
     }
@@ -610,7 +612,7 @@ int main_utf8(int argc, char** argv)
 
         printf("OFFSET   SIZE     NAME\n");
         uint32_t extracted_files = 0, num_extensions_to_check = entrymap_sdp->entry_record_size / 2;
-        if (entrymap_sdp->entry_count > 1)
+        if (entrymap_sdp->entry_count > 1 && fp[0] == 1)
             num_extensions_to_check -= 1;
         if (num_extensions_to_check > array_size(extension)) {
             fprintf(stderr, "ERROR: This archive includes unsupported G1X data\n");
@@ -620,7 +622,7 @@ int main_utf8(int argc, char** argv)
         for (uint32_t i = 0; i < entrymap_sdp->entry_count; i++, fp = &fp[entrymap_sdp->entry_record_size]) {
             const char* name = json_object_get_string(json_array_get_object(json_names, i), "name");
             for (uint32_t j = 0; j < num_extensions_to_check; j++) {
-                if (fp[2 * j] & ENTRY_FLAG_HAS_G1X) {
+                if (fp[2 * j] == 1) {
                     uint32_t index = fp[2 * j + 1];
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                        _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
@@ -652,16 +654,14 @@ int main_utf8(int argc, char** argv)
                 }
             }
         }
-        if (extracted_files != files_count) {
-            fprintf(stderr, "ERROR: Some files were not extracted\n");
-            goto out;
-        }
-
         if (!list_only) {
             snprintf(path, sizeof(path), "%s%cgmpk.json", argv[argc - 1], PATH_SEP);
             json_serialize_to_file_pretty(json, path);
         }
-
+        if (extracted_files != files_count) {
+            fprintf(stderr, "ERROR: Some files were not extracted\n");
+            goto out;
+        }
         r = 0;
     } else {
         // Create a GMPK
@@ -751,7 +751,7 @@ int main_utf8(int argc, char** argv)
                     me->component[j].file_index = files_count++;
                 }
             }
-            if (names_count > 1) {
+            if (entry_data[0] == 1 && names_count > 1) {
                 me->component[entry_data_size - 1].has_component = 1;
                 me->component[entry_data_size - 1].file_index = (i == 0) ? names_count - 1 : 0xffffffff;
             }

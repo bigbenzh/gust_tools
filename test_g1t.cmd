@@ -6,6 +6,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 set EXT=g1t
+set TST=.test
 call build.cmd %EXT%
 if %ERRORLEVEL% neq 0 goto err
 
@@ -38,11 +39,11 @@ for %%a in (%list%) do (
 for %%a in (%list%) do (
   echo | set /p PrintName=* %%a.%EXT%... 
   if exist %%a.%EXT% (
-    gust_%EXT%.exe -y %%a.%EXT% >NUL 2>&1
+    gust_%EXT%.exe -y %%a.%EXT% >%TST% 2>&1
     if !ERRORLEVEL! neq 0 goto err
-    gust_%EXT%.exe -y %%a >NUL 2>&1
+    gust_%EXT%.exe -y %%a >%TST% 2>&1
     if !ERRORLEVEL! neq 0 goto err
-    fc /b %%a.%EXT% %%a.%EXT%.bak >NUL 2>&1
+    fc /b %%a.%EXT% %%a.%EXT%.bak >%TST% 2>&1
     if !ERRORLEVEL! neq 0 goto err
     echo 	[PASS]
   ) else (
@@ -55,8 +56,13 @@ goto out
 
 :err
 echo 	[FAIL]
+echo.
+echo ----------------------- FAILURE DATA -----------------------
+type %TST%
+echo ------------------------------------------------------------
 
 :out
 for %%a in (%list%) do (
   if exist %%a.%EXT%.bak move /y %%a.%EXT%.bak %%a.%EXT% >NUL 2>&1
 )
+del /q %TST% >NUL 2>&1
