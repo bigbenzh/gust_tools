@@ -1,6 +1,6 @@
-name: Build
+name: Windows
 
-on: push
+on: [push, pull_request]
 
 env:
   PROJECT_NAME: gust_tools

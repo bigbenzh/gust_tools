@@ -1,6 +1,7 @@
 # Gust Tools
 
-[![Build status](https://img.shields.io/github/workflow/status/VitaSmith/gust_tools/Build.svg?style=flat-square)](https://github.com/VitaSmith/gust_tools/actions/workflows/build.yml)
+[![Windows Build](https://img.shields.io/github/workflow/status/VitaSmith/gust_tools/Windows.svg?style=flat-square&label=Windows%20Build)](https://github.com/VitaSmith/gust_tools/actions/workflows/windows.yml)
+[![Linux Build](https://img.shields.io/github/workflow/status/VitaSmith/gust_tools/Linux.svg?style=flat-square&label=Linux%20Build)](https://github.com/VitaSmith/gust_tools/actions/workflows/linux.yml)
 [![Github stats](https://img.shields.io/github/downloads/VitaSmith/gust_tools/total.svg?style=flat-square)](https://github.com/VitaSmith/gust_tools/releases)
 [![Latest release](https://img.shields.io/github/release-pre/VitaSmith/gust_tools?style=flat-square)](https://github.com/VitaSmith/gust_tools/releases)
 
