@@ -8,7 +8,7 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
     - name: Checkout repository
@@ -22,7 +22,9 @@ jobs:
       run: echo "::set-output name=version::$(git describe --tags --abbrev=0)"
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1
+      uses: microsoft/setup-msbuild@v1.0.3
+      with:
+        vs-prerelease: true
 
     - name: Build
       run: msbuild ${{ env.PROJECT_NAME }}.sln /m /p:Configuration=Release /p:Platform=x86 /p:AppVersion=${{ steps.set_version.outputs.version }}

@@ -37,7 +37,7 @@ or at the root level (`.pak`).
 Building
 ========
 
-If you have Visual Studio 2019 installed, just open the `.sln` file or run `build.cmd`.
+If you have Visual Studio 2022 installed, just open the `.sln` file or run `build.cmd`.
 
 Otherwise (Linux, MinGW) just issue `make`.
 

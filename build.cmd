@@ -1,6 +1,6 @@
 @echo off
 setlocal
-call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 -no_logo
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64 -no_logo
 cd /d "%~dp0"
 
 set CL=/nologo /errorReport:none /Ox /Gm- /GF /GS- /MP /MT /W4 /WX /wd4200 /wd4204 /wd4214 /wd4324 /wd4996 /D_UNICODE /D_CRT_SECURE_NO_DEPRECATE /UNDEBUG
