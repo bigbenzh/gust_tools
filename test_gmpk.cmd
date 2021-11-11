@@ -7,6 +7,7 @@
 setlocal EnableDelayedExpansion
 set EXT=gmpk
 set TST=.test
+call build.cmd cmp
 call build.cmd %EXT%
 if %ERRORLEVEL% neq 0 goto err
 
@@ -32,7 +33,7 @@ for %%a in (%list%) do (
     if !ERRORLEVEL! neq 0 goto err
     gust_%EXT%.exe -y %%a >%TST% 2>&1
     if !ERRORLEVEL! neq 0 goto err
-    fc.exe /b %%a.%EXT% %%a.%EXT%.bak >%TST% 2>&1
+    gust_cmp.exe %%a.%EXT% %%a.%EXT%.bak >%TST% 2>&1
     if !ERRORLEVEL! neq 0 goto err
     echo 	[PASS]
   ) else (
