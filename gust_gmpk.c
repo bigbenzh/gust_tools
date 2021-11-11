@@ -21,12 +21,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <math.h>
 
 #include "utf8.h"
 #include "util.h"
 #include "parson.h"
-#include "dds.h"
 
 #define JSON_VERSION            2
 #define GMPK_MAGIC              0x4B504D47  // 'GMPK'
@@ -447,11 +445,18 @@ uint32_t write_nid(JSON_Object* json_nid, uint8_t* buf, uint32_t size)
         pos = get_fragment(fragments, &fragments_size, &name[split], (uint16_t)(len - split));
         data[2 * hdr->count + i] <<= 16;
         data[2 * hdr->count + i] |= pos + hdr->count * sizeof_32(uint32_t);
+        data[2 * hdr->count + i] = getv32(data[2 * hdr->count + i]);
         free(name);
     }
     written += 3 * hdr->count * sizeof_32(uint32_t) + fragments_size;
     written = align_to_4(written);
     hdr->size = written;
+    if (data_endianness != platform_endianness) {
+        BSWAP_UINT32(hdr->magic);
+        BSWAP_UINT32(hdr->size);
+        BSWAP_UINT32(hdr->count);
+        BSWAP_UINT32(hdr->max_name_len);
+    }
     return written;
 }
 
@@ -495,7 +500,7 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
     for (uint32_t i = 0; i < (uint32_t)json_array_get_count(json_data_array); i++) {
         JSON_Array* json_data_record_array = json_array_get_array(json_data_array, i);
         for (uint32_t j = 0; j < hdr->data_record_size; j++)
-            data[i * hdr->data_record_size + j] = json_array_get_uint32(json_data_record_array, j);
+            data[i * hdr->data_record_size + j] = getv32(json_array_get_uint32(json_data_record_array, j));
     }
 
     // Write the entry data
@@ -534,16 +539,24 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
             return 0;
         nid1_header* nid_hdr = (nid1_header*)&buf[written];
         written = align_to_16(written + w);
-        gmpk_root->namemap_size = nid_hdr->size;
+        gmpk_root->namemap_size = getv32(getle32(&nid_hdr->size));
         gmpk_root->unknown1 = 1;
         gmpk_root->files_count = files_count;
         gmpk_root->unknown2 = 1;
-        gmpk_root->max_name_len = nid_hdr->max_name_len;
-
-        assert(getle32(&buf[gmpk_root->entrymap_offset + 8]) == SDP1_LE_MAGIC);
-        assert(getle32(&buf[gmpk_root->namemap_offset + 8]) == NID1_LE_MAGIC);
-        assert(getle32(&buf[gmpk_root->namemap_offset + 12]) == gmpk_root->namemap_size);
-        assert(getle32(&buf[gmpk_root->namemap_offset + 20]) == gmpk_root->max_name_len);
+        gmpk_root->max_name_len = getv32(getle32(&nid_hdr->max_name_len));
+        assert(getv32(getle32(&buf[gmpk_root->entrymap_offset + 8])) == SDP1_LE_MAGIC);
+        assert(getv32(getle32(&buf[gmpk_root->namemap_offset + 8])) == NID1_LE_MAGIC);
+        assert(getv32(getle32(&buf[gmpk_root->namemap_offset + 12])) == gmpk_root->namemap_size);
+        assert(getv32(getle32(&buf[gmpk_root->namemap_offset + 20])) == gmpk_root->max_name_len);
+        if (data_endianness != platform_endianness) {
+            BSWAP_UINT32(gmpk_root->entrymap_offset);
+            BSWAP_UINT32(gmpk_root->namemap_offset);
+            BSWAP_UINT32(gmpk_root->namemap_size);
+            BSWAP_UINT32(gmpk_root->unknown1);
+            BSWAP_UINT32(gmpk_root->files_count);
+            BSWAP_UINT32(gmpk_root->unknown2);
+            BSWAP_UINT32(gmpk_root->max_name_len);
+        }
     } else if (strcmp(tag, "EntryMap") == 0) {
         // Process EntryMap
         hdr->entry_record_size = 2 * entry_data_size;
@@ -555,12 +568,26 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
             return 0;
         }
         assert(entry_data != NULL);
-        memcpy(&buf[hdr->entry_offset], entry_data, entry_data_count * sizeof_32(uint32_t));
+        uint32_t* buf_data = (uint32_t*)&buf[hdr->entry_offset];
+        for (uint32_t i = 0; i < entry_data_count; i++)
+            buf_data[i] = getv32(entry_data[i]);
     } else {
         fprintf(stderr, "ERROR: Unsupported SDP tag '%s'\n", tag);
         return 0;
     }
     hdr->size = written;
+    if (data_endianness != platform_endianness) {
+        BSWAP_UINT32(hdr->magic);
+        BSWAP_UINT32(hdr->size);
+        BSWAP_UINT32(hdr->data_count);
+        BSWAP_UINT32(hdr->data_record_size);
+        BSWAP_UINT32(hdr->entry_count);
+        BSWAP_UINT32(hdr->entry_record_size);
+        BSWAP_UINT32(hdr->data_offset);
+        BSWAP_UINT32(hdr->entry_offset);
+        BSWAP_UINT32(hdr->unknown_offset);
+        BSWAP_UINT32(hdr->entrymap_offset);
+    }
     return written;
 }
 
@@ -722,17 +749,14 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Can't parse JSON data from '%s'\n", path);
             goto out;
         }
-        if (json_object_get_boolean(json_object(json), "big_endian")) {
-            data_endianness = big_endian;
-            fprintf(stderr, "ERROR: Repacking of Big-Endian archives is not supported yet\n");
-            goto out;
-        }
         const uint32_t json_version = json_object_get_uint32(json_object(json), "json_version");
         if (json_version != JSON_VERSION) {
             fprintf(stderr, "ERROR: This utility is not compatible with the JSON file provided.\n"
                 "You need to (re)extract the '.gmpk' using this application.\n");
             goto out;
         }
+        if (json_object_get_boolean(json_object(json), "big_endian"))
+            data_endianness = big_endian;
         const char* filename = json_object_get_string(json_object(json), "name");
         if (filename == NULL)
             goto out;
@@ -855,6 +879,8 @@ int main_utf8(int argc, char** argv)
         // Now overwrite the file entry data
         fe[files_count].offset = ftell(file);
         assert(fe[files_count].offset % 0x10 == 0);
+        for (uint32_t i = 0; i <= 2 * files_count; i++)
+            ((uint32_t*)fe)[i] = getv32(((uint32_t*)fe)[i]);
         fseek(file, header_size, SEEK_SET);
         if (fwrite(fe, 1, fe_size, file) != fe_size) {
             fprintf(stderr, "ERROR: Can't write file entry data section\n");

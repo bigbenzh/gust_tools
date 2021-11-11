@@ -17,9 +17,12 @@ set list=^
   G_KAG_D^
   H_KYO_A^
   H_MIU_A^
+  H_MIU_D_WiiU^
+  H_MIU_M_WiiU^
   H_MIU_S^
   R_PHO_A^
   H_YRI_A^
+  H_YRI_A_WiiU^
   H_YRI_V
 
 for %%a in (%list%) do (
