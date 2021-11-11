@@ -2,8 +2,8 @@
 
 [![Windows Build](https://img.shields.io/github/workflow/status/VitaSmith/gust_tools/Windows.svg?style=flat-square&label=Windows%20Build)](https://github.com/VitaSmith/gust_tools/actions/workflows/windows.yml)
 [![Linux Build](https://img.shields.io/github/workflow/status/VitaSmith/gust_tools/Linux.svg?style=flat-square&label=Linux%20Build)](https://github.com/VitaSmith/gust_tools/actions/workflows/linux.yml)
-[![Github stats](https://img.shields.io/github/downloads/VitaSmith/gust_tools/total.svg?style=flat-square)](https://github.com/VitaSmith/gust_tools/releases)
-[![Latest release](https://img.shields.io/github/release-pre/VitaSmith/gust_tools?style=flat-square)](https://github.com/VitaSmith/gust_tools/releases)
+[![Github stats](https://img.shields.io/github/downloads/VitaSmith/gust_tools/total.svg?style=flat-square&label=Downloads)](https://github.com/VitaSmith/gust_tools/releases)
+[![Latest release](https://img.shields.io/github/release-pre/VitaSmith/gust_tools?style=flat-square&label=Latest%20Release)](https://github.com/VitaSmith/gust_tools/releases)
 
 A set of commandline utilities designed to work with Gust (Koei/Tecmo) PC game assets such as the ones from
 [_Atelier series_](https://store.steampowered.com/search/?sort_by=Name_ASC&term=atelier&tags=122&category1=998),

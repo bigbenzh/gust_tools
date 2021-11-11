@@ -647,7 +647,7 @@ int main_utf8(int argc, char** argv)
 
         printf("OFFSET   SIZE     NAME\n");
         uint32_t extracted_files = 0, num_extensions_to_check = entrymap_sdp->entry_record_size / 2;
-        if (entrymap_sdp->entry_count > 1 && fp[0] == 1)
+        if (entrymap_sdp->entry_count > 1 && getv32(getle32(&fp[0])) == 1)
             num_extensions_to_check -= 1;
         if (num_extensions_to_check > array_size(extension)) {
             fprintf(stderr, "ERROR: This archive includes unsupported G1X data\n");
@@ -659,20 +659,27 @@ int main_utf8(int argc, char** argv)
             for (uint32_t j = 0; j < num_extensions_to_check; j++) {
                 if (getv32(getle32(&fp[2 * j])) == 1) {
                     uint32_t index = getv32(getle32(&fp[2 * j + 1]));
+                    // Sanity check
+                    if (index > files_count) {
+                        fprintf(stderr, "ERROR: File index %d is out of range [0, %d]\n",
+                            index, files_count);
+                        fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+                        goto out;
+                    }
                     uint32_t fe_offset = getv32(getle32(&fe[index].offset));
                     uint32_t fe_size = getv32(getle32(&fe[index].size));
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                        _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
-                    // Sanity checks
-                    if (offset + fe_size > file_size || offset + fe_offset > file_size) {
+                    printf("%08x %08x %s%s\n", offset + fe_offset, fe_size, name, extension[j]);
+                    // More sanity checks
+                    if (offset + fe_offset + fe_size > file_size) {
                         fprintf(stderr, "ERROR: Invalid file size or file offset\n");
                         goto out;
                     }
-                    if (index > files_count || extracted_files > files_count) {
-                        fprintf(stderr, "ERROR: Invalid index or number of files\n");
+                    if (extracted_files > files_count) {
+                        fprintf(stderr, "ERROR: Invalid number of files\n");
                         goto out;
                     }
-                    printf("%08x %08x %s%s\n", offset + fe_offset, fe_size, name, extension[j]);
                     extracted_files++;
                     if (list_only)
                         continue;
