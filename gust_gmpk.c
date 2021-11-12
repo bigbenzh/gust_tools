@@ -173,7 +173,7 @@ JSON_Value* read_nid(uint8_t* buf, uint32_t size)
         JSON_Value* json_name = json_value_init_object();
         json_object_set_number(json_object(json_name), "index", data[2 * i]);
         json_object_set_number(json_object(json_name), "flags", data[2 * i + 1]);
-        uint32_t k = 0, val = getv32(getle32(&data[2 * hdr->count + i]));
+        uint32_t k = 0, val = getp32(&data[2 * hdr->count + i]);
         uint8_t len = buf[offset + (val >> 16)];
         if (len > hdr->max_name_len) {
             fprintf(stderr, "ERROR: Fragment length (%d) is greater than %d.\n", len, hdr->max_name_len);
@@ -267,7 +267,7 @@ JSON_Value* read_sdp(uint8_t* buf, uint32_t size)
         if (json_data_record_array == NULL)
             json_data_record_array = json_value_init_array();
         json_array_append_number(json_array(json_data_record_array),
-            getv32(getle32(&buf[offset + i * sizeof_32(uint32_t)])));
+            getp32(&buf[offset + i * sizeof_32(uint32_t)]));
         i++;
         if (i % hdr->data_record_size == 0) {
             json_array_append_value(json_array(json_data_array), json_data_record_array);
@@ -539,15 +539,15 @@ uint32_t write_sdp(JSON_Object* json_sdp, uint8_t* buf, uint32_t size)
             return 0;
         nid1_header* nid_hdr = (nid1_header*)&buf[written];
         written = align_to_16(written + w);
-        gmpk_root->namemap_size = getv32(getle32(&nid_hdr->size));
+        gmpk_root->namemap_size = getp32(&nid_hdr->size);
         gmpk_root->unknown1 = 1;
         gmpk_root->files_count = files_count;
         gmpk_root->unknown2 = 1;
-        gmpk_root->max_name_len = getv32(getle32(&nid_hdr->max_name_len));
-        assert(getv32(getle32(&buf[gmpk_root->entrymap_offset + 8])) == SDP1_LE_MAGIC);
-        assert(getv32(getle32(&buf[gmpk_root->namemap_offset + 8])) == NID1_LE_MAGIC);
-        assert(getv32(getle32(&buf[gmpk_root->namemap_offset + 12])) == gmpk_root->namemap_size);
-        assert(getv32(getle32(&buf[gmpk_root->namemap_offset + 20])) == gmpk_root->max_name_len);
+        gmpk_root->max_name_len = getp32(&nid_hdr->max_name_len);
+        assert(getp32(&buf[gmpk_root->entrymap_offset + 8]) == SDP1_LE_MAGIC);
+        assert(getp32(&buf[gmpk_root->namemap_offset + 8]) == NID1_LE_MAGIC);
+        assert(getp32(&buf[gmpk_root->namemap_offset + 12]) == gmpk_root->namemap_size);
+        assert(getp32(&buf[gmpk_root->namemap_offset + 20]) == gmpk_root->max_name_len);
         if (data_endianness != platform_endianness) {
             BSWAP_UINT32(gmpk_root->entrymap_offset);
             BSWAP_UINT32(gmpk_root->namemap_offset);
@@ -674,7 +674,7 @@ int main_utf8(int argc, char** argv)
 
         printf("OFFSET   SIZE     NAME\n");
         uint32_t extracted_files = 0, num_extensions_to_check = entrymap_sdp->entry_record_size / 2;
-        if (entrymap_sdp->entry_count > 1 && getv32(getle32(&fp[0])) == 1)
+        if (entrymap_sdp->entry_count > 1 && getp32(&fp[0]) == 1)
             num_extensions_to_check -= 1;
         if (num_extensions_to_check > array_size(extension)) {
             fprintf(stderr, "ERROR: This archive includes unsupported G1X data\n");
@@ -684,8 +684,8 @@ int main_utf8(int argc, char** argv)
         for (uint32_t i = 0; i < entrymap_sdp->entry_count; i++, fp = &fp[entrymap_sdp->entry_record_size]) {
             const char* name = json_object_get_string(json_array_get_object(json_names, i), "name");
             for (uint32_t j = 0; j < num_extensions_to_check; j++) {
-                if (getv32(getle32(&fp[2 * j])) == 1) {
-                    uint32_t index = getv32(getle32(&fp[2 * j + 1]));
+                if (getp32(&fp[2 * j]) == 1) {
+                    uint32_t index = getp32(&fp[2 * j + 1]);
                     // Sanity check
                     if (index > files_count) {
                         fprintf(stderr, "ERROR: File index %d is out of range [0, %d]\n",
@@ -693,8 +693,8 @@ int main_utf8(int argc, char** argv)
                         fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                         goto out;
                     }
-                    uint32_t fe_offset = getv32(getle32(&fe[index].offset));
-                    uint32_t fe_size = getv32(getle32(&fe[index].size));
+                    uint32_t fe_offset = getp32(&fe[index].offset);
+                    uint32_t fe_size = getp32(&fe[index].size);
                     snprintf(path, sizeof(path), "%s%s%c%s%s", dir,
                        _basename(argv[argc - 1]), PATH_SEP, name, extension[j]);
                     printf("%08x %08x %s%s\n", offset + fe_offset, fe_size, name, extension[j]);
@@ -723,6 +723,10 @@ int main_utf8(int argc, char** argv)
                     fclose(dst);
                 }
             }
+        }
+        if (getp32(&fe[files_count].offset) != file_size) {
+            fprintf(stderr, "WARNING: The last file offset doesn't match the total file size\n");
+            goto out;
         }
         if (!list_only) {
             snprintf(path, sizeof(path), "%s%cgmpk.json", argv[argc - 1], PATH_SEP);

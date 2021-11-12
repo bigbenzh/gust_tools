@@ -260,7 +260,7 @@ static __inline uint32_t getv32(uint32_t v)
 
 static __inline uint32_t getp32(const void* p)
 {
-    return getv32 (*(const uint32_t*)(const uint8_t*)(p));
+    return getv32(*(const uint32_t*)(const uint8_t*)(p));
 }
 
 static __inline uint64_t getle64(const void* p)
