@@ -19,7 +19,6 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 #include <assert.h>
 #include <math.h>
 
@@ -35,7 +34,7 @@
 // G1T texture flags
 #define G1T_FLAG_SRGB           0x0002000000ULL // Not sure if this one is correct...
 #define G1T_FLAG_LOCAL_XDATA    0x0010000000ULL // Set if the texture has local extra data in the texture entry.
-#define G1T_FLAG_GLOBAL_XDATA   0x1000000000ULL // Set if the texture has global extra data at the beginning of the file.
+#define G1T_FLAG_IS_NORMAL_MAP  0x1000000000ULL // Set if the texture is a normal map.
 
 // Known platforms
 #define SONY_PS2                0x00
@@ -154,6 +153,8 @@ static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t he
         header.flags |= DDS_HEADER_FLAGS_MIPMAP;
         header.caps |= DDS_SURFACE_FLAGS_MIPMAP;
     }
+    if (flags & G1T_FLAG_IS_NORMAL_MAP)
+        header.ddspf.flags |= DDS_NORMAL;
     size_t r = fwrite(&header, sizeof(DDS_HEADER), 1, fd);
     if (r != 1)
         return r;
@@ -430,7 +431,7 @@ int main_utf8(int argc, char** argv)
         dir[get_trailing_slash(dir)] = 0;
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
-        printf("     DIMENSIONS MIPMAPS SUPPORTED?\n");
+        printf("     DIMENSIONS MIPMAPS ZSTACK\n");
         for (uint32_t i = 0; i < getv32(hdr.nb_textures); i++) {
             offset_table[i] = ftell(file) - getv32(hdr.header_size);
             JSON_Object* texture_entry = json_array_get_object(textures_array, i);
@@ -438,6 +439,9 @@ int main_utf8(int argc, char** argv)
             tex.type = json_object_get_uint8(texture_entry, "type");
             tex.exts = json_object_get_uint8(texture_entry, "exts");
             uint64_t flags = json_object_get_uint64(texture_entry, "flags");
+            uint32_t z_stack = json_object_get_uint32(texture_entry, "z_stack");
+            if (z_stack == 0)
+                z_stack = 1;
             tex.hflags = (uint8_t)(flags >> 32);
             tex.lflags = (uint32_t)flags;
             // Read the DDS file
@@ -457,6 +461,8 @@ int main_utf8(int argc, char** argv)
             DDS_HEADER* dds_header = (DDS_HEADER*)&buf[sizeof(uint32_t)];
             dds_size -= sizeof(uint32_t) + sizeof(DDS_HEADER);
             uint8_t* dds_payload = (uint8_t*)&buf[sizeof(uint32_t) + sizeof(DDS_HEADER)];
+            // Adjust the height if we have a Z Stack
+            dds_header->height /= z_stack;
             // We may have a DXT10 additional header
             if (dds_header->ddspf.fourCC == get_fourCC(DDS_FORMAT_DX10)) {
                 dds_size -= sizeof(DDS_HEADER_DXT10);
@@ -532,34 +538,39 @@ int main_utf8(int argc, char** argv)
                 break;
             }
             uint32_t bpp = 0, texture_format = default_texture_format;
-            bool supported = true, swizzled = false;
+            bool swizzled = false;
             switch (tex.type) {
             case 0x00: bpp = 32; break;
             case 0x01: bpp = 32; break;
             case 0x02: bpp = 32; break;
-            case 0x03: bpp = 64; supported = false; break;                                  // UNSUPPORTED!!
-            case 0x04: bpp = 128; supported = false; break;                                 // UNSUPPORTED!!
+//            case 0x03: bpp = 64; break;
+//            case 0x04: bpp = 128; break;
             case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
-            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; supported = false; break; // UNSUPPORTED!!
+//            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; break;
             case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
             case 0x09: bpp = 32; swizzled = true; break;
-            case 0x0A: bpp = 32; swizzled = true; supported = false; break;                 // UNSUPPORTED!!
+//            case 0x0A: bpp = 32; swizzled = true; break;
             case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
             case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             case 0x21: bpp = 32; break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
             case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; swizzled = true; break;
             case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
             case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
             case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
-//            case 0x5D: texture_format = DDS_FORMAT_BC5; bits_per_pixel = ?; break;
-//            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
+//            case 0x5D: texture_format = DDS_FORMAT_ATI1; bpp = ?; break;
+//            case 0x5E: texture_format = DDS_FORMAT_ATI2; bpp = ?; break;
             case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
             case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
             case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
+//            case 0x63: texture_format = DDS_FORMAT_BC4; bpp = 4; swizzled = true; break;
+//            case 0x64: texture_format = DDS_FORMAT_BC5; bpp = 8; swizzled = true; break;
+//            case 0x65: texture_format = DDS_FORMAT_BC6; bpp = 4, swizzled = true; break;
+//            case 0x66: texture_format = DDS_FORMAT_BC7; bpp = 8; swizzled = true; break;
+//            case 0x72: texture_format = DDS_FORMAT_????; bpp = ?; break;
             default:
-                fprintf(stderr, "ERROR: Unhandled texture type 0x%02x\n", tex.type);
+                fprintf(stderr, "ERROR: Unsupported texture type 0x%02x\n", tex.type);
                 goto out;
             }
 
@@ -568,7 +579,7 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
 
-            switch (dds_header->ddspf.flags) {
+            switch (dds_header->ddspf.flags & (DDS_ALPHAPIXELS | DDS_FOURCC | DDS_RGB)) {
             case DDS_RGBA:
                 if ((dds_header->ddspf.RGBBitCount != 32) && (dds_header->ddspf.RGBBitCount != 64) &&
                     (dds_header->ddspf.RGBBitCount != 128)) {
@@ -630,9 +641,9 @@ int main_utf8(int argc, char** argv)
             }
             char dims[16];
             snprintf(dims, sizeof(dims), "%dx%d", dds_header->width, dds_header->height);
-            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex.type, getv32(hdr.header_size) + offset_table[i],
+            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex.type, getv32(hdr.header_size) + offset_table[i],
                 (uint32_t)ftell(file) - offset_table[i] - getv32(hdr.header_size) - (uint32_t)sizeof(g1t_tex_header), path,
-                dims, dds_header->mipMapCount, supported ? "Y" : "N");
+                dims, dds_header->mipMapCount, z_stack);
             free(buf);
             buf = NULL;
         }
@@ -729,7 +740,8 @@ int main_utf8(int argc, char** argv)
         json_object_set_number(json_object(json), "nb_textures", hdr->nb_textures);
         json_object_set_number(json_object(json), "platform", hdr->platform);
         json_object_set_number(json_object(json), "extra_size", hdr->extra_size);
-        json_object_set_boolean(json_object(json), "flip", flip_image);
+        if (flip_image)
+            json_object_set_boolean(json_object(json), "flip", true);
 
         g1t_pos[0] = 0;
         if (!list_only && !create_path(argv[argc - 1]))
@@ -746,7 +758,7 @@ int main_utf8(int argc, char** argv)
         printf("TYPE OFFSET     SIZE       NAME");
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
-        printf("     DIMENSIONS MIPMAPS SUPPORTED?\n");
+        printf("     DIMENSIONS MIPMAPS ZSTACK\n");
         dir = strdup(argv[argc - 1]);
         if (dir == NULL) {
             fprintf(stderr, "ERROR: Alloc error\n");
@@ -775,7 +787,7 @@ int main_utf8(int argc, char** argv)
             // There's an array of flags after the hdr
             json_array_append_number(json_array(json_extra_flags_array),
                 getle32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]));
-            uint32_t pos = hdr->header_size + getv32(x_offset_table[i]);
+            uint32_t z_stack = 1, pos = hdr->header_size + getv32(x_offset_table[i]);
             g1t_tex_header* tex = (g1t_tex_header*)&buf[pos];
             if (data_endianness != platform_endianness) {
                 uint8_t swap_tmp = tex->dx;
@@ -809,34 +821,40 @@ int main_utf8(int argc, char** argv)
                 json_object_set_number(json_object(json_texture), "exts", tex->exts);
             uint32_t texture_format = default_texture_format;
             uint32_t bpp = 0;   // Bits per pixel
-            bool supported = true, swizzled = false;
+            bool swizzled = false;
             switch (tex->type) {
             case 0x00: bpp = 32; break;
             case 0x01: bpp = 32; break;
             case 0x02: bpp = 32; break;
-            case 0x03: bpp = 64; supported = false; break;                                  // UNSUPPORTED!!
-            case 0x04: bpp = 128; supported = false; break;                                 // UNSUPPORTED!!
+//            case 0x03: bpp = 64; break;
+//            case 0x04: bpp = 128; break;
             case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
-            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; supported = false; break; // UNSUPPORTED!!
+//            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; break;
             case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
             case 0x09: bpp = 32; swizzled = true; break;
-            case 0x0A: bpp = 32; swizzled = true; supported = false; break;                 // UNSUPPORTED!!
+//            case 0x0A: bpp = 32; swizzled = true; break;
             case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
             case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
             case 0x21: bpp = 32; break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; supported = false; break; // UNSUPPORTED!!
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
             case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; swizzled = true; break;
             case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
             case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
             case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
-//            case 0x5D: texture_format = DDS_FORMAT_BC5; bits_per_pixel = ?; break;
-//            case 0x5E: texture_format = DDS_FORMAT_BC6; bits_per_pixel = ?; break;
+//            case 0x5D: texture_format = DDS_FORMAT_ATI1; bpp = ?; break;
+//            case 0x5E: texture_format = DDS_FORMAT_ATI2; bpp = ?; break;
             case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
             case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
             case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
+//            case 0x63: texture_format = DDS_FORMAT_BC4; bpp = 4; swizzled = true; break;
+//            case 0x64: texture_format = DDS_FORMAT_BC5; bpp = 8; swizzled = true; break;
+//            case 0x65: texture_format = DDS_FORMAT_BC6; bpp = 4, swizzled = true; break;
+//            case 0x66: texture_format = DDS_FORMAT_BC7; bpp = 8; swizzled = true; break;
+//            case 0x72: texture_format = DDS_FORMAT_????; bpp = ?; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
+                fprintf(stderr, "Please visit: https://github.com/VitaSmith/gust_tools/issues/51\n");
                 continue;
             }
             uint32_t highest_mipmap_size = (width * height * bpp) / 8;
@@ -846,11 +864,6 @@ int main_utf8(int argc, char** argv)
             uint32_t expected_size = ((i + 1 == hdr->nb_textures) ?
                 g1t_size - hdr->header_size : getv32(x_offset_table[i + 1])) - getv32(x_offset_table[i]);
             expected_size -= (uint32_t)sizeof(g1t_tex_header);
-            if (texture_size > expected_size) {
-                fprintf(stderr, "ERROR: Computed texture size is larger than actual size\n");
-                continue;
-            }
-
             if (flags & G1T_FLAG_LOCAL_XDATA) {
                 assert(pos + extra_size < g1t_size);
                 if ((extra_size < 8) || (extra_size % 4 != 0)) {
@@ -865,15 +878,28 @@ int main_utf8(int argc, char** argv)
                 pos += extra_size;
                 expected_size -= extra_size;
             }
-            texture_size = expected_size;
+            if (texture_size > expected_size) {
+                fprintf(stderr, "ERROR: Computed texture size is larger than actual size\n");
+                continue;
+            }
+            if (texture_size < expected_size) {
+                if (expected_size % texture_size != 0)
+                    fprintf(stderr, "ERROR: Extended texture %08x is not a multiple of base size %08x\n",
+                        expected_size, texture_size);
+                z_stack = expected_size / texture_size;
+                json_object_set_number(json_object(json_texture), "z_stack", z_stack);
+                texture_size = expected_size;
+            }
 
             snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
             char dims[16];
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
-            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex->type, hdr->header_size + x_offset_table[i],
-                expected_size, &path[strlen(dir)], dims, tex->mipmaps, supported ? "Y" : "N");
-            if (list_only)
+            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex->type, hdr->header_size + x_offset_table[i],
+                expected_size, &path[strlen(dir)], dims, tex->mipmaps, z_stack);
+            if (list_only) {
+                json_value_free(json_texture);
                 continue;
+            }
             FILE* dst = fopen_utf8(path, "wb");
             if (dst == NULL) {
                 fprintf(stderr, "ERROR: Can't create file '%s'\n", path);
@@ -885,7 +911,7 @@ int main_utf8(int argc, char** argv)
                 fclose(dst);
                 continue;
             }
-            if (write_dds_header(dst, texture_format, width, height, bpp,
+            if (write_dds_header(dst, texture_format, width, height * z_stack, bpp,
                                  tex->mipmaps, flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
@@ -950,6 +976,8 @@ int main_utf8(int argc, char** argv)
         json_object_set_value(json_object(json), "extra_flags", json_extra_flags_array);
         if (hdr->extra_size)
             json_object_set_value(json_object(json), "extra_data", json_global_extra_data_array);
+        else
+            json_value_free(json_global_extra_data_array);
         json_object_set_value(json_object(json), "textures", json_textures_array);
         snprintf(path, sizeof(path), "%s%cg1t.json", argv[argc - 1], PATH_SEP);
         if (!list_only)

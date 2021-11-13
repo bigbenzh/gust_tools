@@ -1,6 +1,6 @@
 /*
   DDS definitions
-  Copyright © 2019-2020 VitaSmith
+  Copyright © 2019-2021 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,13 +22,21 @@
 
 #define DDS_MAGIC                   0x20534444  // "DDS "
 
+#define DDS_ALPHAPIXELS             0x00000001  // DDPF_ALPHAPIXELS
+#define DDS_ALPHA                   0x00000002  // DDPF_ALPHA
 #define DDS_FOURCC                  0x00000004  // DDPF_FOURCC
+#define DDS_PAL4                    0x00000008  // DDPF_PALETTEINDEXED4
+#define DDS_PAL8                    0x00000020  // DDPF_PALETTEINDEXED8
 #define DDS_RGB                     0x00000040  // DDPF_RGB
 #define DDS_RGBA                    0x00000041  // DDPF_RGB | DDPF_ALPHAPIXELS
+#define DDS_PAL1                    0x00000800  // DDPF_PALETTEINDEXED1
+#define DDS_PAL2                    0x00001000  // DDPF_PALETTEINDEXED2
+#define DDS_PREMULTALPHA            0x00008000  // DDPF_ALPHAPREMULT
 #define DDS_LUMINANCE               0x00020000  // DDPF_LUMINANCE
 #define DDS_LUMINANCEA              0x00020001  // DDPF_LUMINANCE | DDPF_ALPHAPIXELS
-#define DDS_ALPHA                   0x00000002  // DDPF_ALPHA
-#define DDS_PAL8                    0x00000020  // DDPF_PALETTEINDEXED8
+// Custom NVTT flags.
+#define DDS_SRGB                    0x40000000; // DDPF_SRGB
+#define DDS_NORMAL                  0x80000000; // DDPF_NORMAL
 
 #define DDS_HEADER_FLAGS_TEXTURE    0x00001007  // DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT
 #define DDS_HEADER_FLAGS_MIPMAP     0x00020000  // DDSD_MIPMAPCOUNT
@@ -65,15 +73,26 @@ enum DDS_FORMAT {
     DDS_FORMAT_ARGB,
     DDS_FORMAT_GRAB,
     DDS_FORMAT_RGBA,
+    DDS_FORMAT_RXGB,
     DDS_FORMAT_R,
+    DDS_FORMAT_UVER,
     DDS_FORMAT_DXT1,
+    DDS_FORMAT_DXT2,
     DDS_FORMAT_DXT3,
+    DDS_FORMAT_DXT4,
     DDS_FORMAT_DXT5,
     DDS_FORMAT_DX10,
     DDS_FORMAT_BC4,
     DDS_FORMAT_BC5,
     DDS_FORMAT_BC6,
-    DDS_FORMAT_BC7
+    DDS_FORMAT_BC7,
+    DDS_FORMAT_BC6H,
+    DDS_FORMAT_BC7L,
+    DDS_FORMAT_ATI1,
+    DDS_FORMAT_ATI2,
+    DDS_FORMAT_A2XY,
+    DDS_FORMAT_DDS,
+    DDS_FORMAT_NVTT,
 };
 
 enum DXGI_FORMAT {
@@ -267,16 +286,38 @@ static __inline uint32_t get_fourCC(int format)
     switch (format) {
     case DDS_FORMAT_DXT1:
         return MAKEFOURCC('D', 'X', 'T', '1');
+    case DDS_FORMAT_DXT2:
+        return MAKEFOURCC('D', 'X', 'T', '2');
     case DDS_FORMAT_DXT3:
         return MAKEFOURCC('D', 'X', 'T', '3');
+    case DDS_FORMAT_DXT4:
+        return MAKEFOURCC('D', 'X', 'T', '4');
     case DDS_FORMAT_DXT5:
         return MAKEFOURCC('D', 'X', 'T', '5');
+    case DDS_FORMAT_ATI1:
     case DDS_FORMAT_BC4:
         return MAKEFOURCC('A', 'T', 'I', '1');
+    case DDS_FORMAT_ATI2:
+        return MAKEFOURCC('A', 'T', 'I', '2');
+    case DDS_FORMAT_A2XY:
+        return MAKEFOURCC('A', '2', 'X', 'Y');
     case DDS_FORMAT_BC7:
     case DDS_FORMAT_DX10:
         return MAKEFOURCC('D', 'X', '1', '0');
+    case DDS_FORMAT_BC7L:
+        return MAKEFOURCC('B', 'C', '7', 'L');
+    case DDS_FORMAT_NVTT:
+        return MAKEFOURCC('N', 'V', 'T', 'T');
+    case DDS_FORMAT_DDS:
+        return MAKEFOURCC('D', 'D', 'S', ' ');
+    case DDS_FORMAT_RXGB:
+        return MAKEFOURCC('R', 'X', 'G', 'B');
+    case DDS_FORMAT_UVER:
+        return MAKEFOURCC('U', 'V', 'E', 'R');
+    case DDS_FORMAT_BC6H:
+        return MAKEFOURCC('B', 'C', '6', 'H');
     default:
+        fprintf(stderr, "WARNING: Unsupported fourCC");
         return 0;
     }
 }
