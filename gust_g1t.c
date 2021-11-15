@@ -447,10 +447,10 @@ int main_utf8(int argc, char** argv)
             // Read the DDS file
             snprintf(path, sizeof(path), "%s%s%c%s", dir, _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
-            uint32_t dds_size = read_file(path, &buf);
-            if (dds_size == UINT32_MAX)
+            uint32_t texture_size = read_file(path, &buf);
+            if (texture_size == UINT32_MAX)
                 goto out;
-            if (dds_size <= sizeof(DDS_HEADER)) {
+            if (texture_size <= sizeof(DDS_HEADER)) {
                 fprintf(stderr, "ERROR: '%s' is too small\n", path);
                 goto out;
             }
@@ -459,16 +459,24 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
             DDS_HEADER* dds_header = (DDS_HEADER*)&buf[sizeof(uint32_t)];
-            dds_size -= sizeof(uint32_t) + sizeof(DDS_HEADER);
+            texture_size -= sizeof(uint32_t) + sizeof(DDS_HEADER);
             uint8_t* dds_payload = (uint8_t*)&buf[sizeof(uint32_t) + sizeof(DDS_HEADER)];
             // Adjust the height if we have a Z Stack
             dds_header->height /= z_stack;
             // We may have a DXT10 additional header
             if (dds_header->ddspf.fourCC == get_fourCC(DDS_FORMAT_DX10)) {
-                dds_size -= sizeof(DDS_HEADER_DXT10);
+                texture_size -= sizeof(DDS_HEADER_DXT10);
                 dds_payload = &dds_payload[sizeof(DDS_HEADER_DXT10)];
             }
-            tex.mipmaps = (uint8_t)dds_header->mipMapCount;
+            tex.mipmaps = json_object_get_uint8(texture_entry, "mipmaps");
+            if (tex.mipmaps == 0) {
+                tex.mipmaps = (uint8_t)dds_header->mipMapCount;
+            } else if ((uint8_t)dds_header->mipMapCount < tex.mipmaps) {
+                fprintf(stderr, "WARNING: Number of mipmaps from imported texture is smaller than original\n");
+                tex.mipmaps = (uint8_t)dds_header->mipMapCount;
+            } else if ((uint8_t)dds_header->mipMapCount > tex.mipmaps) {
+                fprintf(stderr, "NOTE: Truncating number of mipmaps from %d to %d\n", dds_header->mipMapCount, tex.mipmaps);
+            }
             // Are both width and height a power of two?
             bool po2_sizes = is_power_of_2(dds_header->width) && is_power_of_2(dds_header->height);
             if (po2_sizes) {
@@ -482,13 +490,19 @@ int main_utf8(int argc, char** argv)
                 swap_tmp = tex.exts;
                 tex.exts = tex.mipmaps;
                 tex.mipmaps = swap_tmp;
-                // TODO: Not sure if we need to apply the same to hflags...
+                tex.hflags = ((tex.hflags & 0xf0) >> 4) | ((tex.hflags & 0x0f) << 4);
                 tex.lflags = ((tex.lflags & 0xf0f0f0f0) >> 4) | ((tex.lflags & 0x0f0f0f0f) << 4);
             }
             // Write texture header
             if (fwrite(&tex, sizeof(tex), 1, file) != 1) {
                 fprintf(stderr, "ERROR: Can't write texture header\n");
                 goto out;
+            }
+            // Swap back tex.mipmaps for the rest of our processing
+            if (data_endianness != platform_endianness) {
+                uint8_t swap_tmp = tex.exts;
+                tex.exts = tex.mipmaps;
+                tex.mipmaps = swap_tmp;
             }
             // Write extra data
             if (flags & G1T_FLAG_LOCAL_XDATA) {
@@ -574,9 +588,23 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
 
-            if ((dds_size * 8) % bpp != 0) {
+            uint32_t expected_texture_size = 0;
+            for (int j = 0; j < tex.mipmaps; j++)
+                expected_texture_size += MIPMAP_SIZE(texture_format, j, dds_header->width, dds_header->height);
+            expected_texture_size *= z_stack;
+            if (expected_texture_size > texture_size) {
+                fprintf(stderr, "ERROR: expected_texture_size %8x > %8x\n", expected_texture_size, texture_size);
+                goto out;
+            }
+            if ((texture_size * 8) % bpp != 0) {
                 fprintf(stderr, "ERROR: Texture size should be a multiple of %d bits\n", bpp);
                 goto out;
+            }
+            if (expected_texture_size < texture_size) {
+                // Only display the warning if we aren't truncating mipmaps
+                if ((uint8_t)dds_header->mipMapCount <= tex.mipmaps)
+                    fprintf(stderr, "WARNING: Reducing texture size\n");
+                texture_size = expected_texture_size;
             }
 
             switch (dds_header->ddspf.flags & (DDS_ALPHAPIXELS | DDS_FOURCC | DDS_RGB)) {
@@ -602,7 +630,7 @@ int main_utf8(int argc, char** argv)
             }
 
             if (flip_image || ((getv32(hdr.platform) == NINTENDO_3DS) && (tex.type == 0x09 || tex.type == 0x45)))
-                flip(bpp, dds_payload, dds_size, dds_header->width);
+                flip(bpp, dds_payload, texture_size, dds_header->width);
 
             if (swizzled) {
                 int16_t mo = 0;             // Morton order
@@ -621,21 +649,20 @@ int main_utf8(int argc, char** argv)
                     mo = (int16_t)log2(min(dds_header->width / wf, dds_header->height / hf));
                     break;
                 }
-                uint32_t highest_mipmap_size = (dds_header->width * dds_header->height * bpp) / 8;
-                uint32_t offset = 0, morton_size = highest_mipmap_size;
+                uint32_t offset = 0;
                 for (int j = 1; j <= tex.mipmaps && mo != 0; j++) {
-                    mortonize(bpp * wf * hf, mo, dds_header->width / wf / j, dds_header->height / hf / j,
-                        &dds_payload[offset], morton_size);
-                    offset += morton_size;
-                    morton_size = highest_mipmap_size / ((j * 2) * (j * 2));
+                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, dds_header->width, dds_header->height);
+                    mortonize(bpp * wf * hf, mo, dds_header->width / wf / (1 << (j - 1)), dds_header->height / hf / (1 << (j - 1)),
+                        &dds_payload[offset], mipmap_size);
+                    offset += mipmap_size;
                     mo += (mo > 0) ? -1 : +1;
                 }
             }
             if (texture_format >= DDS_FORMAT_ABGR && texture_format <= DDS_FORMAT_RGBA)
-                rgba_convert(bpp, "ARGB", argb_name[texture_format], dds_payload, dds_size);
+                rgba_convert(bpp, "ARGB", argb_name[texture_format], dds_payload, texture_size);
 
             // Write texture
-            if (fwrite(dds_payload, 1, dds_size, file) != dds_size) {
+            if (fwrite(dds_payload, 1, texture_size, file) != texture_size) {
                 fprintf(stderr, "ERROR: Can't write texture data\n");
                 goto out;
             }
@@ -643,7 +670,7 @@ int main_utf8(int argc, char** argv)
             snprintf(dims, sizeof(dims), "%dx%d", dds_header->width, dds_header->height);
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex.type, getv32(hdr.header_size) + offset_table[i],
                 (uint32_t)ftell(file) - offset_table[i] - getv32(hdr.header_size) - (uint32_t)sizeof(g1t_tex_header), path,
-                dims, dds_header->mipMapCount, z_stack);
+                dims, tex.mipmaps, z_stack);
             free(buf);
             buf = NULL;
         }
@@ -783,6 +810,7 @@ int main_utf8(int argc, char** argv)
             break;
         }
 
+        r = 0;
         for (uint32_t i = 0; i < hdr->nb_textures; i++) {
             // There's an array of flags after the hdr
             json_array_append_number(json_array(json_extra_flags_array),
@@ -816,6 +844,7 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%03d.dds", i);
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
+            json_object_set_number(json_object(json_texture), "mipmaps", tex->mipmaps);
             json_object_set_number(json_object(json_texture), "flags", (double)flags);
             if (tex->exts != 0)
                 json_object_set_number(json_object(json_texture), "exts", tex->exts);
@@ -855,19 +884,21 @@ int main_utf8(int argc, char** argv)
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 fprintf(stderr, "Please visit: https://github.com/VitaSmith/gust_tools/issues/51\n");
+                r = -1;
                 continue;
             }
-            uint32_t highest_mipmap_size = (width * height * bpp) / 8;
-            uint32_t texture_size = highest_mipmap_size;
-            for (int j = 0; j < tex->mipmaps - 1; j++)
-                texture_size += highest_mipmap_size / (4 << (j * 2));
-            uint32_t expected_size = ((i + 1 == hdr->nb_textures) ?
+            uint32_t expected_texture_size = 0;
+            for (int j = 0; j < tex->mipmaps; j++)
+                expected_texture_size += MIPMAP_SIZE(texture_format, j, width, height);
+            uint32_t texture_size = ((i + 1 == hdr->nb_textures) ?
                 g1t_size - hdr->header_size : getv32(x_offset_table[i + 1])) - getv32(x_offset_table[i]);
-            expected_size -= (uint32_t)sizeof(g1t_tex_header);
+            texture_size -= (uint32_t)sizeof(g1t_tex_header);
             if (flags & G1T_FLAG_LOCAL_XDATA) {
                 assert(pos + extra_size < g1t_size);
                 if ((extra_size < 8) || (extra_size % 4 != 0)) {
                     fprintf(stderr, "ERROR: Can't handle local extra_data of size 0x%08x\n", extra_size);
+                    r = -1;
+                    continue;
                 } else if (!list_only) {
                     JSON_Value* json_extra_array_val = json_value_init_array();
                     JSON_Array* json_extra_array_obj = json_array(json_extra_array_val);
@@ -876,26 +907,27 @@ int main_utf8(int argc, char** argv)
                     json_object_set_value(json_object(json_texture), "extra_data", json_extra_array_val);
                 }
                 pos += extra_size;
-                expected_size -= extra_size;
+                texture_size -= extra_size;
             }
-            if (texture_size > expected_size) {
-                fprintf(stderr, "ERROR: Computed texture size is larger than actual size\n");
+            if (texture_size < expected_texture_size) {
+                fprintf(stderr, "ERROR: Actual texture size is smaller than expected size\n");
+                r = -1;
                 continue;
-            }
-            if (texture_size < expected_size) {
-                if (expected_size % texture_size != 0)
-                    fprintf(stderr, "ERROR: Extended texture %08x is not a multiple of base size %08x\n",
-                        expected_size, texture_size);
-                z_stack = expected_size / texture_size;
+            } else if (texture_size > expected_texture_size) {
+                if (texture_size % expected_texture_size != 0)
+                    fprintf(stderr, "WARNING: Actual texture size is 0x%x bytes larger than expected size 0x%x\n",
+                        texture_size - expected_texture_size, expected_texture_size);
+                z_stack = texture_size / expected_texture_size;
                 json_object_set_number(json_object(json_texture), "z_stack", z_stack);
-                texture_size = expected_size;
+                expected_texture_size = texture_size;
             }
 
             snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
             char dims[16];
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
-            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex->type, hdr->header_size + x_offset_table[i],
-                expected_size, &path[strlen(dir)], dims, tex->mipmaps, z_stack);
+            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex->type,
+                hdr->header_size + hdr->extra_size + getv32(x_offset_table[i]),
+                texture_size, &path[strlen(dir)], dims, tex->mipmaps, z_stack);
             if (list_only) {
                 json_value_free(json_texture);
                 continue;
@@ -903,18 +935,21 @@ int main_utf8(int argc, char** argv)
             FILE* dst = fopen_utf8(path, "wb");
             if (dst == NULL) {
                 fprintf(stderr, "ERROR: Can't create file '%s'\n", path);
+                r = -1;
                 continue;
             }
             uint32_t dds_magic = DDS_MAGIC;
             if (fwrite(&dds_magic, sizeof(dds_magic), 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write magic\n");
                 fclose(dst);
+                r = -1;
                 continue;
             }
             if (write_dds_header(dst, texture_format, width, height * z_stack, bpp,
                                  tex->mipmaps, flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
+                r = -1;
                 continue;
             }
 
@@ -925,13 +960,13 @@ int main_utf8(int argc, char** argv)
             uint32_t wf = 1, hf = 1;    // Width and height factor
             switch (texture_format) {
             case DDS_FORMAT_RGBA:
-                rgba_convert(bpp, "RGBA", "ARGB", &buf[pos], texture_size);
+                rgba_convert(bpp, "RGBA", "ARGB", &buf[pos], expected_texture_size);
                 break;
             case DDS_FORMAT_ABGR:
-                rgba_convert(bpp, "ABGR", "ARGB", &buf[pos], texture_size);
+                rgba_convert(bpp, "ABGR", "ARGB", &buf[pos], expected_texture_size);
                 break;
             case DDS_FORMAT_GRAB:
-                rgba_convert(bpp, "GRAB", "ARGB", &buf[pos], texture_size);
+                rgba_convert(bpp, "GRAB", "ARGB", &buf[pos], expected_texture_size);
                 break;
             case DDS_FORMAT_DXT1:
             case DDS_FORMAT_DXT5:
@@ -953,18 +988,18 @@ int main_utf8(int argc, char** argv)
                     mo = -1 * (int16_t)log2(min(height / hf, width / wf));
                     break;
                 }
-                uint32_t offset = 0, morton_size = highest_mipmap_size;
+                uint32_t offset = 0;
                 for (int j = 1; j <= tex->mipmaps && mo != 0; j++) {
-                    mortonize(bpp * wf * hf, mo, width / wf / j, height / hf / j,
-                        &buf[pos + offset], morton_size);
-                    offset += morton_size;
-                    morton_size = highest_mipmap_size / ((j * 2) * (j * 2));
+                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, width, height);
+                    mortonize(bpp * wf * hf, mo, width / wf / (1 << (j - 1)), height / hf / (1 << (j - 1)),
+                        &buf[pos + offset], mipmap_size);
+                    offset += mipmap_size;
                     mo += (mo > 0) ? -1 : +1;
                 }
             }
             if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x09 || tex->type == 0x45)))
-                flip(bpp, &buf[pos], texture_size, width);
-            if (fwrite(&buf[pos], texture_size, 1, dst) != 1) {
+                flip(bpp, &buf[pos], expected_texture_size, width);
+            if (fwrite(&buf[pos], expected_texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
                 fclose(dst);
                 continue;

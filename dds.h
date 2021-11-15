@@ -95,6 +95,66 @@ enum DDS_FORMAT {
     DDS_FORMAT_NVTT,
 };
 
+// DDS format: Pixel block width/height (assumed square)
+static __inline unsigned int dds_bwh(enum DDS_FORMAT f) {
+    switch (f) {
+    case DDS_FORMAT_DXT1:
+    case DDS_FORMAT_DXT2:
+    case DDS_FORMAT_DXT3:
+    case DDS_FORMAT_DXT4:
+    case DDS_FORMAT_DXT5:
+    case DDS_FORMAT_DX10:
+    case DDS_FORMAT_BC4:
+    case DDS_FORMAT_BC5:
+    case DDS_FORMAT_BC6:
+    case DDS_FORMAT_BC7:
+    case DDS_FORMAT_ATI1:
+    case DDS_FORMAT_ATI2:
+        return 4;
+    default:
+        return 1;
+    }
+}
+
+// DDS format: Bytes per pixel block
+static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
+    switch (f) {
+    case DDS_FORMAT_BGR:
+        return 3;
+    case DDS_FORMAT_ABGR:
+    case DDS_FORMAT_ARGB:
+    case DDS_FORMAT_GRAB:
+    case DDS_FORMAT_RGBA:
+    case DDS_FORMAT_RXGB:
+        return 4;
+    case DDS_FORMAT_R:
+        return 1;
+    case DDS_FORMAT_DXT1:
+    case DDS_FORMAT_BC4:
+    case DDS_FORMAT_ATI1:
+        return 8;
+    case DDS_FORMAT_DXT2:
+    case DDS_FORMAT_DXT3:
+    case DDS_FORMAT_DXT4:
+    case DDS_FORMAT_DXT5:
+    case DDS_FORMAT_DX10:
+    case DDS_FORMAT_BC5:
+    case DDS_FORMAT_BC6:
+    case DDS_FORMAT_BC7:
+    case DDS_FORMAT_ATI2:
+        return 16;
+    default:
+        // No idea, so assert and return 0
+        assert(false);
+        return 0;
+    }
+}
+
+// Compute the mipmap size at level l for a texture of DDS_FORMAT f of dimensions w x h
+// See https://docs.microsoft.com/en-us/windows/win32/direct3ddds/dds-file-layout-for-textures
+#define MIPMAP_SIZE(f, l, w, h) (max(1, (((w) / (1 << (l)) + dds_bwh(f) - 1) / dds_bwh(f))) * \
+                                 max(1, (((h) / (1 << (l)) + dds_bwh(f) - 1) / dds_bwh(f))) * dds_bpb(f))
+
 enum DXGI_FORMAT {
     DXGI_FORMAT_UNKNOWN,
     DXGI_FORMAT_R32G32B32A32_TYPELESS,
