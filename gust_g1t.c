@@ -86,13 +86,14 @@ typedef struct {
 // Same order as enum DDS_FORMAT
 const char* argb_name[] = { NULL, NULL, "ABGR", "ARGB", "GRAB", "RGBA" };
 
-static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t height,
-                               uint32_t bpp, uint32_t mipmaps, uint64_t flags)
+static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
+                               uint32_t height, uint32_t mipmaps, uint64_t flags)
 {
     if ((fd == NULL) || (width == 0) || (height == 0))
         return 0;
 
     DDS_HEADER header = { 0 };
+    uint32_t bpp = dds_bpp(format);
     header.size = 124;
     header.flags = DDS_HEADER_FLAGS_TEXTURE;
     header.height = height;
@@ -169,10 +170,12 @@ static size_t write_dds_header(FILE* fd, int format, uint32_t width, uint32_t he
     return r;
 }
 
-static void rgba_convert(const uint32_t bits_per_pixel, const char* in,
+static void rgba_convert(const enum DDS_FORMAT format, const char* in,
                          const char* out, uint8_t* buf, const uint32_t size)
 {
+    uint32_t bits_per_pixel = dds_bpp(format);
     assert(bits_per_pixel % 8 == 0);
+    assert(format >= DDS_FORMAT_BGR && format <= DDS_FORMAT_RGBA);
 
     const int rgba[4] = { 'R', 'G', 'B', 'A' };
     if (strcmp(in, out) == 0)
@@ -242,11 +245,13 @@ static __inline void morton_to_xy(uint32_t z, uint32_t* x, uint32_t* y)
 
 // Apply or reverse a Morton transformation, a.k.a. a Z-order curve, to a texture.
 // If morton_order is negative, a reverse Morton transformation is applied.
-static void mortonize(const uint32_t bits_per_element, const int16_t morton_order,
-                      const uint32_t width, const uint32_t height,
-                      uint8_t* buf, const uint32_t size)
+static void mortonize(const enum DDS_FORMAT format, const int16_t morton_order,
+                      uint32_t width, uint32_t height, uint8_t* buf, const uint32_t size, uint32_t wf)
 {
+    const uint32_t bits_per_element = dds_bpp(format) * dds_bwh(format) * dds_bwh(format) * wf;
     const uint32_t bytes_per_element = bits_per_element / 8;
+    width /= dds_bwh(format) * wf;
+    height /= dds_bwh(format);
     uint32_t num_elements = size / bytes_per_element;
     uint16_t k = (uint16_t)abs(morton_order);
     bool reverse = (morton_order != (int16_t)k);
@@ -551,38 +556,38 @@ int main_utf8(int argc, char** argv)
                 default_texture_format = DDS_FORMAT_RGBA;
                 break;
             }
-            uint32_t bpp = 0, texture_format = default_texture_format;
+            uint32_t texture_format = default_texture_format;
             bool swizzled = false;
             switch (tex.type) {
-            case 0x00: bpp = 32; break;
-            case 0x01: bpp = 32; break;
-            case 0x02: bpp = 32; break;
+            case 0x00: break;
+            case 0x01: break;
+            case 0x02: break;
 //            case 0x03: bpp = 64; break;
 //            case 0x04: bpp = 128; break;
-            case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
-//            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; break;
-            case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
-            case 0x09: bpp = 32; swizzled = true; break;
-//            case 0x0A: bpp = 32; swizzled = true; break;
-            case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
-            case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
-            case 0x21: bpp = 32; break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
-            case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; swizzled = true; break;
-            case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
-            case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
-            case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
-//            case 0x5D: texture_format = DDS_FORMAT_ATI1; bpp = ?; break;
-//            case 0x5E: texture_format = DDS_FORMAT_ATI2; bpp = ?; break;
-            case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
-            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
-            case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
-//            case 0x63: texture_format = DDS_FORMAT_BC4; bpp = 4; swizzled = true; break;
-//            case 0x64: texture_format = DDS_FORMAT_BC5; bpp = 8; swizzled = true; break;
-//            case 0x65: texture_format = DDS_FORMAT_BC6; bpp = 4, swizzled = true; break;
-//            case 0x66: texture_format = DDS_FORMAT_BC7; bpp = 8; swizzled = true; break;
-//            case 0x72: texture_format = DDS_FORMAT_????; bpp = ?; break;
+            case 0x06: texture_format = DDS_FORMAT_DXT1; break;
+//            case 0x07: texture_format = DDS_FORMAT_DXT3; break;
+            case 0x08: texture_format = DDS_FORMAT_DXT5; break;
+            case 0x09: swizzled = true; break;
+//            case 0x0A: swizzled = true; break;
+            case 0x10: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
+            case 0x12: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
+            case 0x21: break;
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; break;
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; break;
+            case 0x45: texture_format = DDS_FORMAT_BGR; swizzled = true; break;
+            case 0x59: texture_format = DDS_FORMAT_DXT1; break;
+            case 0x5B: texture_format = DDS_FORMAT_DXT5; break;
+            case 0x5C: texture_format = DDS_FORMAT_BC4; break;
+//            case 0x5D: texture_format = DDS_FORMAT_ATI1; break;
+//            case 0x5E: texture_format = DDS_FORMAT_ATI2; break;
+            case 0x5F: texture_format = DDS_FORMAT_BC7; break;
+            case 0x60: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
+            case 0x62: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
+//            case 0x63: texture_format = DDS_FORMAT_BC4; swizzled = true; break;
+//            case 0x64: texture_format = DDS_FORMAT_BC5; swizzled = true; break;
+//            case 0x65: texture_format = DDS_FORMAT_BC6; swizzled = true; break;
+//            case 0x66: texture_format = DDS_FORMAT_BC7; swizzled = true; break;
+//            case 0x72: texture_format = DDS_FORMAT_????; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type 0x%02x\n", tex.type);
                 goto out;
@@ -596,8 +601,8 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "ERROR: expected_texture_size %8x > %8x\n", expected_texture_size, texture_size);
                 goto out;
             }
-            if ((texture_size * 8) % bpp != 0) {
-                fprintf(stderr, "ERROR: Texture size should be a multiple of %d bits\n", bpp);
+            if ((texture_size * 8) % dds_bpp(texture_format) != 0) {
+                fprintf(stderr, "ERROR: Texture size should be a multiple of %d bits\n", dds_bpp(texture_format));
                 goto out;
             }
             if (expected_texture_size < texture_size) {
@@ -630,36 +635,37 @@ int main_utf8(int argc, char** argv)
             }
 
             if (flip_image || ((getv32(hdr.platform) == NINTENDO_3DS) && (tex.type == 0x09 || tex.type == 0x45)))
-                flip(bpp, dds_payload, texture_size, dds_header->width);
+                flip(dds_bpp(texture_format), dds_payload, texture_size, dds_header->width);
 
             if (swizzled) {
-                int16_t mo = 0;             // Morton order
-                uint32_t wf = 1, hf = 1;    // Width and height factors
-                if ((texture_format == DDS_FORMAT_DXT1) || (texture_format == DDS_FORMAT_DXT5)) {
-                    wf = 4;
-                    hf = 4;
-                }
+                int16_t mo = 0;     // Morton order
+                uint32_t wf = 1;    // Width factor
                 switch (getv32(hdr.platform)) {
                 case SONY_PS4:
                 case NINTENDO_3DS:
                     mo = 3;
-                    wf *= 2;
+                    wf = 2;
                     break;
+                case NINTENDO_WIIU:
+                    wf = 2;
+                    // Fall through
                 default:
-                    mo = (int16_t)log2(min(dds_header->width / wf, dds_header->height / hf));
+                    mo = (int16_t)log2(min(dds_header->width / dds_bwh(texture_format) / wf,
+                            dds_header->height / dds_bwh(texture_format)));
                     break;
                 }
                 uint32_t offset = 0;
+                assert(mo != 0);
                 for (int j = 1; j <= tex.mipmaps && mo != 0; j++) {
                     uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, dds_header->width, dds_header->height);
-                    mortonize(bpp * wf * hf, mo, dds_header->width / wf / (1 << (j - 1)), dds_header->height / hf / (1 << (j - 1)),
-                        &dds_payload[offset], mipmap_size);
+                    mortonize(texture_format, mo, dds_header->width / (1 << (j - 1)), dds_header->height / (1 << (j - 1)),
+                        &dds_payload[offset], mipmap_size, wf);
                     offset += mipmap_size;
                     mo += (mo > 0) ? -1 : +1;
                 }
             }
             if (texture_format >= DDS_FORMAT_ABGR && texture_format <= DDS_FORMAT_RGBA)
-                rgba_convert(bpp, "ARGB", argb_name[texture_format], dds_payload, texture_size);
+                rgba_convert(texture_format, "ARGB", argb_name[texture_format], dds_payload, texture_size);
 
             // Write texture
             if (fwrite(dds_payload, 1, texture_size, file) != texture_size) {
@@ -849,38 +855,37 @@ int main_utf8(int argc, char** argv)
             if (tex->exts != 0)
                 json_object_set_number(json_object(json_texture), "exts", tex->exts);
             uint32_t texture_format = default_texture_format;
-            uint32_t bpp = 0;   // Bits per pixel
             bool swizzled = false;
             switch (tex->type) {
-            case 0x00: bpp = 32; break;
-            case 0x01: bpp = 32; break;
-            case 0x02: bpp = 32; break;
+            case 0x00: break;
+            case 0x01: break;
+            case 0x02: break;
 //            case 0x03: bpp = 64; break;
 //            case 0x04: bpp = 128; break;
-            case 0x06: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
-//            case 0x07: texture_format = DDS_FORMAT_DXT3; bpp = 8; break;
-            case 0x08: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
-            case 0x09: bpp = 32; swizzled = true; break;
-//            case 0x0A: bpp = 32; swizzled = true; break;
-            case 0x10: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
-            case 0x12: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
-            case 0x21: bpp = 32; break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; bpp = 16; break;
-            case 0x45: texture_format = DDS_FORMAT_BGR; bpp = 24; swizzled = true; break;
-            case 0x59: texture_format = DDS_FORMAT_DXT1; bpp = 4; break;
-            case 0x5B: texture_format = DDS_FORMAT_DXT5; bpp = 8; break;
-            case 0x5C: texture_format = DDS_FORMAT_BC4; bpp = 4; break;
-//            case 0x5D: texture_format = DDS_FORMAT_ATI1; bpp = ?; break;
-//            case 0x5E: texture_format = DDS_FORMAT_ATI2; bpp = ?; break;
-            case 0x5F: texture_format = DDS_FORMAT_BC7; bpp = 8; break;
-            case 0x60: texture_format = DDS_FORMAT_DXT1; bpp = 4; swizzled = true; break;
-            case 0x62: texture_format = DDS_FORMAT_DXT5; bpp = 8; swizzled = true; break;
-//            case 0x63: texture_format = DDS_FORMAT_BC4; bpp = 4; swizzled = true; break;
-//            case 0x64: texture_format = DDS_FORMAT_BC5; bpp = 8; swizzled = true; break;
-//            case 0x65: texture_format = DDS_FORMAT_BC6; bpp = 4, swizzled = true; break;
-//            case 0x66: texture_format = DDS_FORMAT_BC7; bpp = 8; swizzled = true; break;
-//            case 0x72: texture_format = DDS_FORMAT_????; bpp = ?; break;
+            case 0x06: texture_format = DDS_FORMAT_DXT1; break;
+//            case 0x07: texture_format = DDS_FORMAT_DXT3; break;
+            case 0x08: texture_format = DDS_FORMAT_DXT5; break;
+            case 0x09: swizzled = true; break;
+//            case 0x0A: swizzled = true; break;
+            case 0x10: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
+            case 0x12: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
+            case 0x21: break;
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; break;
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; break;
+            case 0x45: texture_format = DDS_FORMAT_BGR; swizzled = true; break;
+            case 0x59: texture_format = DDS_FORMAT_DXT1; break;
+            case 0x5B: texture_format = DDS_FORMAT_DXT5; break;
+            case 0x5C: texture_format = DDS_FORMAT_BC4; break;
+//            case 0x5D: texture_format = DDS_FORMAT_ATI1; break;
+//            case 0x5E: texture_format = DDS_FORMAT_ATI2; break;
+            case 0x5F: texture_format = DDS_FORMAT_BC7; break;
+            case 0x60: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
+            case 0x62: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
+//            case 0x63: texture_format = DDS_FORMAT_BC4; swizzled = true; break;
+//            case 0x64: texture_format = DDS_FORMAT_BC5; swizzled = true; break;
+//            case 0x65: texture_format = DDS_FORMAT_BC6; swizzled = true; break;
+//            case 0x66: texture_format = DDS_FORMAT_BC7; swizzled = true; break;
+//            case 0x72: texture_format = DDS_FORMAT_????; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 fprintf(stderr, "Please visit: https://github.com/VitaSmith/gust_tools/issues/51\n");
@@ -945,7 +950,7 @@ int main_utf8(int argc, char** argv)
                 r = -1;
                 continue;
             }
-            if (write_dds_header(dst, texture_format, width, height * z_stack, bpp,
+            if (write_dds_header(dst, texture_format, width, height * z_stack,
                                  tex->mipmaps, flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
@@ -957,48 +962,49 @@ int main_utf8(int argc, char** argv)
             // tools like Visual Studio or PhotoShop can't be bothered
             // to honour the pixel format from the DDS header and instead
             // insist on using ARGB always...
-            uint32_t wf = 1, hf = 1;    // Width and height factor
             switch (texture_format) {
             case DDS_FORMAT_RGBA:
-                rgba_convert(bpp, "RGBA", "ARGB", &buf[pos], expected_texture_size);
+                rgba_convert(texture_format, "RGBA", "ARGB", &buf[pos], expected_texture_size);
                 break;
             case DDS_FORMAT_ABGR:
-                rgba_convert(bpp, "ABGR", "ARGB", &buf[pos], expected_texture_size);
+                rgba_convert(texture_format, "ABGR", "ARGB", &buf[pos], expected_texture_size);
                 break;
             case DDS_FORMAT_GRAB:
-                rgba_convert(bpp, "GRAB", "ARGB", &buf[pos], expected_texture_size);
-                break;
-            case DDS_FORMAT_DXT1:
-            case DDS_FORMAT_DXT5:
-                wf = 4; // (hdr->platform == SONY_PS4) ? 8 : 4;
-                hf = 4;
+                rgba_convert(texture_format, "GRAB", "ARGB", &buf[pos], expected_texture_size);
                 break;
             default:
                 break;
             }
             if (swizzled) {
-                int16_t mo;     // Morton order
+                int16_t mo = 0;     // Morton order
+                uint32_t wf = 1;    // Width factor
                 switch (hdr->platform) {
                 case SONY_PS4:
                 case NINTENDO_3DS:
-                    wf *= 2;
                     mo = -3;
+                    wf = 2;
                     break;
+                case NINTENDO_WIIU:
+                    wf = 2;
+                    break;
+                    // Fall through
                 default:
-                    mo = -1 * (int16_t)log2(min(height / hf, width / wf));
+                    mo = -1 * (int16_t)log2(min(width / dds_bwh(texture_format) / wf,
+                        height / dds_bwh(texture_format)));
                     break;
                 }
                 uint32_t offset = 0;
+                assert(mo != 0);
                 for (int j = 1; j <= tex->mipmaps && mo != 0; j++) {
                     uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, width, height);
-                    mortonize(bpp * wf * hf, mo, width / wf / (1 << (j - 1)), height / hf / (1 << (j - 1)),
-                        &buf[pos + offset], mipmap_size);
+                    mortonize(texture_format, mo, width / (1 << (j - 1)), height / (1 << (j - 1)),
+                        &buf[pos + offset], mipmap_size, wf);
                     offset += mipmap_size;
                     mo += (mo > 0) ? -1 : +1;
                 }
             }
             if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x09 || tex->type == 0x45)))
-                flip(bpp, &buf[pos], expected_texture_size, width);
+                flip(dds_bpp(texture_format), &buf[pos], expected_texture_size, width);
             if (fwrite(&buf[pos], expected_texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
                 fclose(dst);

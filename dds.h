@@ -68,11 +68,11 @@
 
 enum DDS_FORMAT {
     DDS_FORMAT_UNKNOWN,
-    DDS_FORMAT_BGR,
-    DDS_FORMAT_ABGR,
+    DDS_FORMAT_BGR,                 // Should be the first uncompressed format with RGBA components
+    DDS_FORMAT_ABGR,                // as needed per rgba_convert() format validation.
     DDS_FORMAT_ARGB,
     DDS_FORMAT_GRAB,
-    DDS_FORMAT_RGBA,
+    DDS_FORMAT_RGBA,                // Should be the last uncompressed format with RGBA components
     DDS_FORMAT_RXGB,
     DDS_FORMAT_R,
     DDS_FORMAT_UVER,
@@ -143,6 +143,40 @@ static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
     case DDS_FORMAT_BC7:
     case DDS_FORMAT_ATI2:
         return 16;
+    default:
+        // No idea, so assert and return 0
+        assert(false);
+        return 0;
+    }
+}
+
+// DDS format: Bits per individual pixel
+static __inline unsigned int dds_bpp(enum DDS_FORMAT f) {
+    switch (f) {
+    case DDS_FORMAT_BGR:
+        return 24;
+    case DDS_FORMAT_ABGR:
+    case DDS_FORMAT_ARGB:
+    case DDS_FORMAT_GRAB:
+    case DDS_FORMAT_RGBA:
+    case DDS_FORMAT_RXGB:
+        return 32;
+    case DDS_FORMAT_R:
+        return 8;
+    case DDS_FORMAT_DXT1:
+    case DDS_FORMAT_BC4:
+    case DDS_FORMAT_ATI1:
+        return 4;
+    case DDS_FORMAT_DXT2:
+    case DDS_FORMAT_DXT3:
+    case DDS_FORMAT_DXT4:
+    case DDS_FORMAT_DXT5:
+    case DDS_FORMAT_DX10:
+    case DDS_FORMAT_BC5:
+    case DDS_FORMAT_BC6:
+    case DDS_FORMAT_BC7:
+    case DDS_FORMAT_ATI2:
+        return 8;
     default:
         // No idea, so assert and return 0
         assert(false);
