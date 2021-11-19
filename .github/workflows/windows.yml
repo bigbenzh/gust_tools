@@ -23,8 +23,6 @@ jobs:
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v1.0.3
-      with:
-        vs-prerelease: true
 
     - name: Build
       run: msbuild ${{ env.PROJECT_NAME }}.sln /m /p:Configuration=Release /p:Platform=x86 /p:AppVersion=${{ steps.set_version.outputs.version }}

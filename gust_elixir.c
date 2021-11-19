@@ -38,8 +38,10 @@
 #include "miniz_tinfl.h"
 #include "miniz_tdef.h"
 
+#define JSON_VERSION            1
 #define EARC_MAGIC              0x45415243  // 'EARC'
 #define DEFAULT_CHUNK_SIZE      0x4000
+#define REPORT_URL              "https://github.com/VitaSmith/gust_tools/issues"
 
 #pragma pack(push, 1)
 typedef struct {
@@ -55,7 +57,7 @@ typedef struct {
 typedef struct {
     uint32_t offset;
     uint32_t size;
-    char     filename[0];
+    char     filename[32];      // May be extended by (filename_size << 4)
 } lxr_entry;
 #pragma pack(pop)
 
@@ -85,11 +87,13 @@ int main_utf8(int argc, char** argv)
     FILE *file = NULL, *dst = NULL;
     JSON_Value* json = NULL;
     tdefl_compressor* compressor = NULL;
+    lxr_entry* table = NULL;
     bool list_only = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'l');
+    bool decompress_only = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'd');
 
-    if ((argc != 2) && !list_only) {
+    if ((argc != 2) && !list_only && !decompress_only) {
         printf("%s %s (c) 2019-2021 VitaSmith\n\n"
-            "Usage: %s [-l] <elixir[.gz]> file>\n\n"
+            "Usage: %s [-d] [-l] <elixir[.gz]> file>\n\n"
             "Extracts (file) or recreates (directory) a Gust .elixir archive.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
             "is being overwritten for the first time.\n",
@@ -102,6 +106,10 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Option -l is not supported when creating an archive\n");
             goto out;
         }
+        if (decompress_only) {
+            fprintf(stderr, "ERROR: Option -d is not supported when creating an archive\n");
+            goto out;
+        }
         snprintf(path, sizeof(path), "%s%celixir.json", argv[argc - 1], PATH_SEP);
         if (!is_file(path)) {
             fprintf(stderr, "ERROR: '%s' does not exist\n", path);
@@ -112,7 +120,12 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Can't parse JSON data from '%s'\n", path);
             goto out;
         }
-        bool uses_older_version = (json_object_get_value(json_object(json), "version") != NULL);
+        //const uint32_t json_version = json_object_get_uint32(json_object(json), "json_version");
+        //if (json_version != JSON_VERSION) {
+        //    fprintf(stderr, "ERROR: This utility is not compatible with the JSON file provided.\n"
+        //        "You need to (re)extract the original archive using this application.\n");
+        //    goto out;
+        //}
         const char* filename = json_object_get_string(json_object(json), "name");
         if (filename == NULL)
             goto out;
@@ -131,32 +144,29 @@ int main_utf8(int argc, char** argv)
         }
         lxr_header hdr = { 0 };
         hdr.magic = EARC_MAGIC;
-        hdr.filename_size = json_object_get_uint32(json_object(json),
-            uses_older_version ? "version" : "filename_size");
-        lxr_entry_size += 0x20 + (hdr.filename_size << 4);
-        hdr.nb_files = json_object_get_uint32(json_object(json), "nb_files");
+        hdr.header_size = (uint32_t)sizeof(lxr_header);
         hdr.flags = json_object_get_uint32(json_object(json), "flags");
-        hdr.header_size = json_object_get_uint32(json_object(json), "header_size");
-        hdr.table_size = json_object_get_uint32(json_object(json), "table_size");
+        JSON_Array* json_files_array = json_object_get_array(json_object(json), "files");
+        hdr.nb_files = (uint32_t)json_array_get_count(json_files_array);
+        if (hdr.nb_files == 0) {
+            fprintf(stderr, "ERROR: JSON files array is either missing or empty\n");
+            goto out;
+        }
+        uint32_t max_filename_length = 0x30;
+        for (uint32_t i = 0; i < hdr.nb_files; i++)
+            max_filename_length = max(max_filename_length,
+                (uint32_t)strlen(json_array_get_string(json_files_array, i) + 1));
+        hdr.filename_size = (max_filename_length - 0x20 + 0x0f) / 0x10;
+        lxr_entry_size += hdr.filename_size * 0x10;
+        hdr.table_size = hdr.nb_files * lxr_entry_size;
         if (fwrite(&hdr, sizeof(hdr), 1, file) != 1) {
             fprintf(stderr, "ERROR: Can't write header\n");
             goto out;
         }
-        if (hdr.nb_files * lxr_entry_size != hdr.table_size) {
-            fprintf(stderr, "ERROR: Unexpected size for offset table\n");
-            goto out;
-        }
-        JSON_Array* json_files_array = json_object_get_array(json_object(json), "files");
-        if (json_array_get_count(json_files_array) != hdr.nb_files) {
-            fprintf(stderr, "ERROR: number of files doesn't match header\n");
-            goto out;
-        }
-
-        lxr_entry* table = (lxr_entry*)calloc(hdr.nb_files, lxr_entry_size);
+        table = (lxr_entry*)calloc(hdr.nb_files, lxr_entry_size);
         // Allocate the space in file - we'll update it later on
         if (fwrite(table, lxr_entry_size, hdr.nb_files, file) != hdr.nb_files) {
             fprintf(stderr, "ERROR: Can't write header table\n");
-            free(table);
             goto out;
         }
         printf("OFFSET   SIZE     NAME\n");
@@ -169,17 +179,14 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%s%c%s", _basename(argv[argc - 1]), PATH_SEP, entry_name);
             if (strcmp(entry_name, "dummy") != 0) {
                 entry->size = read_file(path, &buf);
-                if (entry->size == UINT32_MAX) {
-                    free(table);
+                if (entry->size == UINT32_MAX)
                     goto out;
-                }
             }
             strncpy(entry->filename, json_array_get_string(json_files_array, i),
                 0x20 + ((size_t)hdr.filename_size << 4));
             printf("%08x %08x %s\n", entry->offset, entry->size, path);
             if ((entry->size != 0) && (fwrite(buf, 1, entry->size, file) != entry->size)) {
                 fprintf(stderr, "ERROR: Can't add file data\n");
-                free(table);
                 goto out;
             }
             free(buf);
@@ -190,16 +197,13 @@ int main_utf8(int argc, char** argv)
         fseek(file, 2 * sizeof(uint32_t), SEEK_SET);
         if (fwrite(&hdr.payload_size, sizeof(uint32_t), 1, file) != 1) {
             fprintf(stderr, "ERROR: Can't update file size\n");
-            free(table);
             goto out;
         }
         fseek(file, hdr.header_size, SEEK_SET);
         if (fwrite(table, lxr_entry_size, hdr.nb_files, file) != hdr.nb_files) {
             fprintf(stderr, "ERROR: Can't write header table\n");
-            free(table);
             goto out;
         }
-        free(table);
 
         if (json_object_get_boolean(json_object(json), "compressed")) {
             printf("Compressing...\n");
@@ -252,7 +256,8 @@ int main_utf8(int argc, char** argv)
 
         r = 0;
     } else {
-        printf("%s '%s'...\n", list_only ? "Listing" : "Extracting", _basename(argv[argc - 1]));
+        printf("%s '%s'...\n", list_only ? "Listing" :
+            (decompress_only ? "Decompressing" : "Extracting"), _basename(argv[argc - 1]));
         char* elixir_pos = strstr(argv[argc - 1], ".elixir");
         if (elixir_pos == NULL) {
             fprintf(stderr, "ERROR: File should have a '.elixir[.gz]' extension\n");
@@ -325,11 +330,7 @@ increase_buf_size:
                 pos += s;
             } while (zsize != 0);
             file_size = pos;
-
-//#define DECOMPRESS_ONLY
-#ifdef DECOMPRESS_ONLY
-            if (!list_only) {
-                FILE* dst = NULL;
+            if (decompress_only) {
                 *gz_pos = 0;
                 dst = fopen(argv[argc - 1], "wb");
                 if (dst == NULL) {
@@ -341,12 +342,10 @@ increase_buf_size:
                     fclose(dst);
                     goto out;
                 }
-                printf("%08x %s\n", (uint32_t)file_size, basename(argv[argc - 1]));
-                fclose(dst);
+                printf("%08x %s\n", (uint32_t)file_size, _basename(argv[argc - 1]));
                 r = 0;
                 goto out;
             }
-#endif
         } else {
             buf = malloc(file_size);
             if (buf == NULL)
@@ -359,8 +358,10 @@ increase_buf_size:
 
         // Now that we have an uncompressed .elixir file, extract the files
         json = json_value_init_object();
+        json_object_set_number(json_object(json), "json_version", JSON_VERSION);
         json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
-        json_object_set_boolean(json_object(json), "compressed", (gz_pos != NULL));
+        if (gz_pos != NULL)
+            json_object_set_boolean(json_object(json), "compressed", (gz_pos != NULL));
 
         *elixir_pos = 0;
         if (!list_only && !create_path(argv[argc - 1]))
@@ -375,19 +376,22 @@ increase_buf_size:
             fprintf(stderr, "ERROR: filename_size is too large (0x%08X)\n", hdr->filename_size);
             goto out;
         }
-        json_object_set_number(json_object(json), "filename_size", hdr->filename_size);
-        lxr_entry_size += 0x20 + (hdr->filename_size <<= 4);
+        if (hdr->header_size != 0x1C) {
+            fprintf(stderr, "ERROR: Unexpected header size (0x%08X)\n", hdr->header_size);
+            fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+            goto out;
+        }
+        lxr_entry_size += hdr->filename_size * 0x10;
         json_object_set_number(json_object(json), "flags", hdr->flags);
-        // If we find files with different additional files or name sizes
-        // the following may become important to have stored
-        json_object_set_number(json_object(json), "header_size", hdr->header_size);
-        json_object_set_number(json_object(json), "table_size", hdr->table_size);
 
-        if (sizeof(lxr_header) + (size_t)hdr->nb_files * lxr_entry_size + hdr->payload_size != file_size) {
+        if (hdr->nb_files * lxr_entry_size != hdr->table_size) {
+            fprintf(stderr, "ERROR: Table size mismatch\n");
+            goto out;
+        }
+        if (sizeof(lxr_header) + hdr->table_size + hdr->payload_size != file_size) {
             fprintf(stderr, "ERROR: File size mismatch\n");
             goto out;
         }
-        json_object_set_number(json_object(json), "nb_files", hdr->nb_files);
 
         JSON_Value* json_files_array = json_value_init_array();
         printf("OFFSET   SIZE     NAME\n");
@@ -418,6 +422,7 @@ out:
     json_value_free(json);
     free(buf);
     free(zbuf);
+    free(table);
     free(compressor);
     if (file != NULL)
         fclose(file);
