@@ -27,14 +27,17 @@
 #include "parson.h"
 #include "dds.h"
 
-#define JSON_VERSION            1
-#define G1TG_LE_MAGIC           0x47315447  // 'GT1G'
-#define G1TG_BE_MAGIC           0x47543147  // 'G1TG'
+#define JSON_VERSION            2
+#define G1TG_MAGIC              0x47315447        // 'G1TG'
+#define REPORT_URL              "https://github.com/VitaSmith/gust_tools/issues"
 
-// G1T texture flags
-#define G1T_FLAG_SRGB           0x0002000000ULL // Not sure if this one is correct...
-#define G1T_FLAG_LOCAL_XDATA    0x0010000000ULL // Set if the texture has local extra data in the texture entry.
-#define G1T_FLAG_IS_NORMAL_MAP  0x1000000000ULL // Set if the texture is a normal map.
+// Known flags
+#define G1T_FLAG_STANDARD_FLAGS 0x000000011200ULL // Flags that are commonly set
+#define G1T_FLAG_EXTENDED_DATA  0x000000000001ULL // Set if the texture has local data in the texture entry.
+#define G1T_FLAG_SRGB           0x000000002000ULL // Set if the texture uses sRGB
+#define G1T_FLAG_NORMAL_MAP     0x030000000000ULL // Usually set for normal maps (but not always)
+#define G1T_FLAG_SURFACE_TEX    0x000000000001ULL // Set for textures that appear on a model's surface
+#define G1T_FLAG_Z_STACKED      0x000020000000ULL // Set if the texture has a Z-stack
 
 // Known platforms
 #define SONY_PS2                0x00
@@ -63,28 +66,162 @@ typedef struct {
     uint32_t    extra_size;
 } g1t_header;
 
-// This is (optionally) followed by uint32_t extra_flags[nb_textures]
+// This is followed by uint32_t global_flags[nb_textures]
 // This is followed by uint32_t offset[nb_textures]
 // This is (optionally) followed by an array of global extra data (for textures with G1T_FLAG_GLOBAL_XDATA)
 
 typedef struct {
-    uint8_t     exts : 4;       // Set to 1 for extended textures
+    uint8_t     z_mipmaps : 4;
     uint8_t     mipmaps : 4;
     uint8_t     type;
     uint8_t     dx : 4;
     uint8_t     dy : 4;
-    // The flags appear to be a set of nibbles (that need to be reordered
-    // for Big Endian) that occupy 5 bytes in all.
-    uint8_t     hflags;         // high part
-    uint32_t    lflags;         // low part
+    uint8_t     flags[5];
 } g1t_tex_header;
 
-// May be followed by extra_data[]
+// May be followed by a data[] section of 12, 16 or 20 bytes where the 32-bit
+// words at positions 12 and 16 are the actual texture width and height.
 
 #pragma pack(pop)
 
 // Same order as enum DDS_FORMAT
 const char* argb_name[] = { NULL, NULL, "ABGR", "ARGB", "GRAB", "RGBA" };
+
+static inline const char* platform_to_name(uint32_t platform)
+{
+    switch (platform) {
+    case SONY_PS2:
+        return "PS2";
+    case SONY_PS3:
+        return "PS3";
+    case MICROSOFT_X360:
+        return "Xbox 360";
+    case NINTENDO_WII:
+        return "Wii";
+    case NINTENDO_DS:
+        return "DS";
+    case NINTENDO_3DS:
+        return "3DS";
+    case SONY_PSV:
+        return "Vita";
+    case GOOGLE_ANDROID:
+        return "Android";
+    case APPLE_IOS:
+        return "iOS";
+    case NINTENDO_WIIU:
+        return "WiiU";
+    case MICROSOFT_WINDOWS:
+        return "Windows";
+    case SONY_PS4:
+        return "PS4";
+    case MICROSOFT_XONE:
+        return "Xbox One";
+    case NINTENDO_SWITCH:
+        return "Switch";
+    default:
+        return NULL;
+    }
+}
+
+static inline uint32_t name_to_platform(const char* name)
+{
+    if (name == NULL)
+        return UINT32_MAX;
+    if (stricmp(name, "PS2") == 0)
+        return SONY_PS2;
+    if (stricmp(name, "PS3") == 0)
+        return SONY_PS3;
+    if (stricmp(name, "Xbox 360") == 0)
+        return MICROSOFT_X360;
+    if (stricmp(name, "Wii") == 0)
+        return NINTENDO_WII;
+    if (stricmp(name, "DS") == 0)
+        return NINTENDO_DS;
+    if (stricmp(name, "3DS") == 0)
+        return NINTENDO_3DS;
+    if (stricmp(name, "Vita") == 0)
+        return SONY_PSV;
+    if (stricmp(name, "Android") == 0)
+        return GOOGLE_ANDROID;
+    if (stricmp(name, "iOS") == 0)
+        return APPLE_IOS;
+    if (stricmp(name, "WiiU") == 0)
+        return NINTENDO_WIIU;
+    if (stricmp(name, "Windows") == 0)
+        return MICROSOFT_WINDOWS;
+    if (stricmp(name, "PS4") == 0)
+        return SONY_PS4;
+    if (stricmp(name, "Xbox One") == 0)
+        return MICROSOFT_XONE;
+    if (stricmp(name, "Switch") == 0)
+        return NINTENDO_SWITCH;
+    return UINT32_MAX;
+}
+
+static void json_to_flags(uint64_t* flags, JSON_Array* json_flags_array)
+{
+    memset(flags, 0, 2 * sizeof(uint64_t));
+    for (size_t i = 0; i < json_array_get_count(json_flags_array); i++) {
+        const char* flag_str = json_array_get_string(json_flags_array, i);
+        // Named flags
+        if (strcmp(flag_str, "STANDARD_FLAGS") == 0)
+            flags[0] |= G1T_FLAG_STANDARD_FLAGS;
+        else if (strcmp(flag_str, "NORMAL_MAP") == 0)
+            flags[0] |= G1T_FLAG_NORMAL_MAP;
+        else if (strcmp(flag_str, "SRGB_COLORSPACE") == 0)
+            flags[0] |= G1T_FLAG_SRGB;
+        else if (strcmp(flag_str, "EXTENDED_DATA") == 0)
+            flags[0] |= G1T_FLAG_EXTENDED_DATA;
+        else if (strcmp(flag_str, "SURFACE_TEXTURE") == 0)
+            flags[1] |= G1T_FLAG_SURFACE_TEX;
+        else if (strcmp(flag_str, "Z_STACKED") == 0)
+            flags[1] |= G1T_FLAG_Z_STACKED;
+        // Unnamed flags
+        else if (strncmp(flag_str, "FLAG_", 5) == 0) {
+            int val = atoi(&flag_str[5]);
+            flags[0 + val / 64] |= 1ULL << (val % 64);
+        }
+        else {
+            fprintf(stderr, "ERROR: Unsupported JSON flag '%s'\n", flag_str);
+        }
+    }
+}
+
+#define CHECK_MASK(flags, mask, array, string) \
+  if ((flags & (mask)) == (mask)) { flags &= ~(mask); json_array_append_string(json_array(array), string); }
+
+static JSON_Value* flags_to_json(uint64_t* flags)
+{
+    JSON_Value* json_flags_array = json_value_init_array();
+    static char str[64] = { 0 };
+    uint64_t flags_copy[2] = { flags[0], 0 };
+
+    if (flags_copy[0] & 1ULL)
+        flags_copy[1] = flags[1];
+
+    // Named flags
+    CHECK_MASK(flags_copy[0], G1T_FLAG_STANDARD_FLAGS, json_flags_array, "STANDARD_FLAGS");
+    // A value of 3 in the extra flags seems to be associated
+    // with a normal map... but not always (e.g. BR2's pc000_scl)
+    CHECK_MASK(flags_copy[0], G1T_FLAG_NORMAL_MAP, json_flags_array, "NORMAL_MAP");
+    CHECK_MASK(flags_copy[0], G1T_FLAG_SRGB, json_flags_array, "SRGB_COLORSPACE");
+    CHECK_MASK(flags_copy[0], G1T_FLAG_EXTENDED_DATA, json_flags_array, "EXTENDED_DATA");
+    CHECK_MASK(flags_copy[1], G1T_FLAG_SURFACE_TEX, json_flags_array, "SURFACE_TEXTURE");
+    CHECK_MASK(flags_copy[1], G1T_FLAG_Z_STACKED, json_flags_array, "Z_STACKED");
+
+    // Unnamed flags
+    for (int i = 0; i < 2; i++) {
+        uint64_t mask = 1ULL;
+        for (int j = 0; j < 64; j++) {
+            if (flags_copy[i] & mask) {
+                snprintf(str, sizeof(str), "FLAG_%03d", 64 * i + j);
+                json_array_append_string(json_array(json_flags_array), str);
+            }
+            mask <<= 1;
+        }
+    }
+    return json_flags_array;
+}
 
 static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
                                uint32_t height, uint32_t mipmaps, uint64_t flags)
@@ -154,7 +291,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.flags |= DDS_HEADER_FLAGS_MIPMAP;
         header.caps |= DDS_SURFACE_FLAGS_MIPMAP;
     }
-    if (flags & G1T_FLAG_IS_NORMAL_MAP)
+    if (flags & G1T_FLAG_NORMAL_MAP)
         header.ddspf.flags |= DDS_NORMAL;
     size_t r = fwrite(&header, sizeof(DDS_HEADER), 1, fd);
     if (r != 1)
@@ -315,7 +452,7 @@ int main_utf8(int argc, char** argv)
     int r = -1;
     FILE *file = NULL;
     uint8_t* buf = NULL;
-    uint32_t* offset_table = NULL;
+    uint32_t *offset_table = NULL, *flag_table = NULL;
     uint32_t magic;
     char path[256], *dir = NULL;
     JSON_Value* json = NULL;
@@ -355,13 +492,16 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
         const char* filename = json_object_get_string(json_object(json), "name");
-        const char* version = json_object_get_string(json_object(json), "version");
-        if ((filename == NULL) || (version == NULL))
+        uint32_t version = json_object_get_uint32(json_object(json), "version");
+        if ((filename == NULL) || (version == 0) || (version > 10000))
             goto out;
-        if (json_object_get_uint32(json_object(json), "platform") == SONY_PS3)
-            data_endianness = big_endian;
-        if (!flip_image)
-            flip_image = json_object_get_boolean(json_object(json), "flip");
+        JSON_Array* json_textures_array = json_object_get_array(json_object(json), "textures");
+        if (json_textures_array == NULL) {
+            fprintf(stderr, "ERROR: Invalid or missing JSON texture array\n");
+            goto out;
+        }
+        JSON_Array* json_extra_data_array = json_object_get_array(json_object(json), "extra_data");
+
         strcpy(path, argv[argc - 1]);
         if (get_trailing_slash(path) != 0)
             path[get_trailing_slash(path)] = 0;
@@ -377,54 +517,52 @@ int main_utf8(int argc, char** argv)
             goto out;
         }
         g1t_header hdr = { 0 };
-        hdr.magic = (data_endianness == little_endian) ? G1TG_LE_MAGIC : G1TG_BE_MAGIC;
-        hdr.version = getv32(getbe32(version));
+        if (name_to_platform(json_object_get_string(json_object(json), "platform")) == UINT32_MAX)
+            hdr.platform = json_object_get_uint32(json_object(json), "platform");
+        else
+            hdr.platform = name_to_platform(json_object_get_string(json_object(json), "platform"));
+        if (hdr.platform == SONY_PS3 || hdr.platform == NINTENDO_WII || hdr.platform == NINTENDO_WIIU)
+            data_endianness = big_endian;
+        hdr.magic = G1TG_MAGIC;
+        char version_string[5] = { 0 };
+        snprintf(version_string, 5, "%04d", version);
+        hdr.version = getbe32(version_string);
         hdr.total_size = 0;  // To be rewritten when we're done
-        hdr.nb_textures = getv32(json_object_get_uint32(json_object(json), "nb_textures"));
-        hdr.platform = getv32(json_object_get_uint32(json_object(json), "platform"));
-        hdr.extra_size = getv32(json_object_get_uint32(json_object(json), "extra_size"));
-        hdr.header_size = getv32(sizeof(hdr) + getv32(hdr.nb_textures) * sizeof(uint32_t));
-        if (fwrite(&hdr, sizeof(hdr), 1, file) != 1) {
+        hdr.nb_textures = (uint32_t)json_array_get_count(json_textures_array);
+
+        hdr.extra_size = (uint32_t)json_array_get_count(json_extra_data_array) * sizeof(uint16_t);
+        hdr.header_size = sizeof(hdr) + hdr.nb_textures * sizeof(uint32_t);
+        fix_endian32(&hdr, sizeof(hdr) / sizeof(uint32_t));
+        if (fwrite(&hdr, sizeof(uint32_t), sizeof(hdr) / sizeof(uint32_t), file) != sizeof(hdr) / sizeof(uint32_t)) {
             fprintf(stderr, "ERROR: Can't write header\n");
             goto out;
         }
+        fix_endian32(&hdr, sizeof(hdr) / sizeof(uint32_t));
 
-        JSON_Array* json_extra_flags_array = json_object_get_array(json_object(json), "extra_flags");
-        if (json_array_get_count(json_extra_flags_array) != getv32(hdr.nb_textures)) {
-            fprintf(stderr, "ERROR: number of extra flags doesn't match number of textures\n");
+        if (!flip_image)
+            flip_image = json_object_get_boolean(json_object(json), "flip");
+
+        // Create the placeholders for the global flags and offset table
+        flag_table = calloc(hdr.nb_textures, sizeof(uint32_t));
+        if (fwrite(flag_table, sizeof(uint32_t), hdr.nb_textures, file) != hdr.nb_textures) {
+            fprintf(stderr, "ERROR: Can't write global flags\n");
             goto out;
         }
-        for (uint32_t i = 0; i < getv32(hdr.nb_textures); i++) {
-            uint32_t extra_flag = getv32((uint32_t)json_array_get_number(json_extra_flags_array, i));
-            if (fwrite(&extra_flag, sizeof(uint32_t), 1, file) != 1) {
-                fprintf(stderr, "ERROR: Can't write extra flags\n");
-                goto out;
-            }
-        }
 
-        offset_table = calloc(getv32(hdr.nb_textures), sizeof(uint32_t));
-        offset_table[0] = getv32(hdr.nb_textures) * sizeof(uint32_t);
-        if (fwrite(offset_table, getv32(hdr.nb_textures) * sizeof(uint32_t), 1, file) != 1) {
+        offset_table = calloc(hdr.nb_textures, sizeof(uint32_t));
+        offset_table[0] = hdr.nb_textures * sizeof(uint32_t);
+        if (fwrite(offset_table, sizeof(uint32_t), hdr.nb_textures, file) != hdr.nb_textures) {
             fprintf(stderr, "ERROR: Can't write texture offsets\n");
             goto out;
         }
 
         // Deal with the global extra data array
-        if (hdr.extra_size != 0) {
-            JSON_Array* json_global_extra_data_array = json_object_get_array(json_object(json), "extra_data");
-            for (uint32_t i = 0; i < hdr.extra_size / sizeof(uint32_t); i++) {
-                uint32_t extra_data = getv32((uint32_t)json_array_get_number(json_global_extra_data_array, i));
-                if (fwrite(&extra_data, sizeof(uint32_t), 1, file) != 1) {
-                    fprintf(stderr, "ERROR: Can't write global extra data\n");
-                    goto out;
-                }
+        for (size_t i = 0; i < json_array_get_count(json_extra_data_array); i++) {
+            uint16_t extra_data = json_array_get_uint16(json_extra_data_array, i);
+            if (fwrite(&extra_data, 1, sizeof(uint16_t), file) != sizeof(uint16_t)) {
+                fprintf(stderr, "ERROR: Can't write global extra data\n");
+                goto out;
             }
-        }
-
-        JSON_Array* textures_array = json_object_get_array(json_object(json), "textures");
-        if (json_array_get_count(textures_array) != getv32(hdr.nb_textures)) {
-            fprintf(stderr, "ERROR: number of textures in array doesn't match\n");
-            goto out;
         }
 
         printf("TYPE OFFSET     SIZE       NAME");
@@ -437,18 +575,20 @@ int main_utf8(int argc, char** argv)
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
         printf("     DIMENSIONS MIPMAPS ZSTACK\n");
-        for (uint32_t i = 0; i < getv32(hdr.nb_textures); i++) {
-            offset_table[i] = ftell(file) - getv32(hdr.header_size);
-            JSON_Object* texture_entry = json_array_get_object(textures_array, i);
+        for (uint32_t i = 0; i < hdr.nb_textures; i++) {
+            offset_table[i] = ftell(file) - hdr.header_size;
+            JSON_Object* texture_entry = json_array_get_object(json_textures_array, i);
             g1t_tex_header tex = { 0 };
             tex.type = json_object_get_uint8(texture_entry, "type");
-            tex.exts = json_object_get_uint8(texture_entry, "exts");
-            uint64_t flags = json_object_get_uint64(texture_entry, "flags");
+            tex.z_mipmaps = json_object_get_uint8(texture_entry, "z_mipmaps");
+            uint64_t flags[2];
+            json_to_flags(flags, json_object_get_array(texture_entry, "flags"));
+            for (int j = 0; j < ARRAYSIZE(tex.flags); j++)
+                tex.flags[ARRAYSIZE(tex.flags) - j - 1] = (uint8_t)(flags[0] >> (8 * j));
+            flag_table[i] = (uint32_t)(flags[0] >> 40);
             uint32_t z_stack = json_object_get_uint32(texture_entry, "z_stack");
             if (z_stack == 0)
                 z_stack = 1;
-            tex.hflags = (uint8_t)(flags >> 32);
-            tex.lflags = (uint32_t)flags;
             // Read the DDS file
             snprintf(path, sizeof(path), "%s%s%c%s", dir, _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
@@ -483,20 +623,26 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "NOTE: Truncating number of mipmaps from %d to %d\n", dds_header->mipMapCount, tex.mipmaps);
             }
             // Are both width and height a power of two?
+            // TODO: Also check if height/width are larger than what we can represent with dx/dy
             bool po2_sizes = is_power_of_2(dds_header->width) && is_power_of_2(dds_header->height);
+            if (!po2_sizes && !(flags[0] & G1T_FLAG_EXTENDED_DATA)) {
+                fprintf(stderr, "ERROR: Extended data flag must be set for textures with dimensions that aren't a power of two\n");
+                goto out;
+            }
             if (po2_sizes) {
                 tex.dx = (uint8_t)find_msb(dds_header->width);
                 tex.dy = (uint8_t)find_msb(dds_header->height);
             }
-            if (data_endianness != platform_endianness) {
+            if (data_endianness == big_endian) {
                 uint8_t swap_tmp = tex.dx;
                 tex.dx = tex.dy;
                 tex.dy = swap_tmp;
-                swap_tmp = tex.exts;
-                tex.exts = tex.mipmaps;
+                swap_tmp = tex.z_mipmaps;
+                tex.z_mipmaps = tex.mipmaps;
                 tex.mipmaps = swap_tmp;
-                tex.hflags = ((tex.hflags & 0xf0) >> 4) | ((tex.hflags & 0x0f) << 4);
-                tex.lflags = ((tex.lflags & 0xf0f0f0f0) >> 4) | ((tex.lflags & 0x0f0f0f0f) << 4);
+            } else {
+                for (int j = 0; j < ARRAYSIZE(tex.flags); j++)
+                    tex.flags[j] = tex.flags[j] >> 4 | tex.flags[j] << 4;
             }
             // Write texture header
             if (fwrite(&tex, sizeof(tex), 1, file) != 1) {
@@ -505,38 +651,28 @@ int main_utf8(int argc, char** argv)
             }
             // Swap back tex.mipmaps for the rest of our processing
             if (data_endianness != platform_endianness) {
-                uint8_t swap_tmp = tex.exts;
-                tex.exts = tex.mipmaps;
+                uint8_t swap_tmp = tex.z_mipmaps;
+                tex.z_mipmaps = tex.mipmaps;
                 tex.mipmaps = swap_tmp;
             }
-            // Write extra data
-            if (flags & G1T_FLAG_LOCAL_XDATA) {
-                JSON_Array* json_local_extra_data_array = json_object_get_array(texture_entry, "extra_data");
-                uint32_t extra_data_size = (uint32_t)(json_array_get_count(json_local_extra_data_array) + 1) * sizeof(uint32_t);
-                if (!po2_sizes && extra_data_size < 4 * sizeof(uint32_t)) {
-                    fprintf(stderr, "ERROR: Non power-of-two width or height is missing from extra data\n");
+            // Write data
+            if (flags[0] & G1T_FLAG_EXTENDED_DATA) {
+                uint32_t data[5], data_size;
+                setbe32(&data[1], (uint32_t)(flags[1] >> 32));
+                setbe32(&data[2], (uint32_t)flags[1]);
+                data[3] = dds_header->width;
+                data[4] = dds_header->height;
+                if (!is_power_of_2(dds_header->width))
+                    data_size = 5;
+                else if (!is_power_of_2(dds_header->width))
+                    data_size = 4;
+                else
+                    data_size = 3;
+                data[0] = data_size * sizeof(uint32_t);
+                fix_endian32(data, data_size);
+                if (fwrite(data, sizeof(uint32_t), data_size, file) != data_size) {
+                    fprintf(stderr, "ERROR: Can't write extended data\n");
                     goto out;
-                }
-                extra_data_size = getv32(extra_data_size);
-                if (fwrite(&extra_data_size, sizeof(uint32_t), 1, file) != 1) {
-                    fprintf(stderr, "ERROR: Can't write extra data size\n");
-                    goto out;
-                }
-                for (size_t j = 0; j < json_array_get_count(json_local_extra_data_array); j++) {
-                    uint32_t extra_data = (uint32_t)json_array_get_number(json_local_extra_data_array, j);
-                    if ((j == 2) && (!po2_sizes) && (extra_data != dds_header->width)) {
-                        fprintf(stderr, "ERROR: DDS width and local extra data width don't match\n");
-                        goto out;
-                    }
-                    if ((j == 3) && (!po2_sizes) && (extra_data != dds_header->height)) {
-                        fprintf(stderr, "ERROR: DDS height and local extra data height don't match\n");
-                        goto out;
-                    }
-                    extra_data = getv32(extra_data);
-                    if (fwrite(&extra_data, sizeof(uint32_t), 1, file) != 1) {
-                        fprintf(stderr, "ERROR: Can't write local extra data\n");
-                        goto out;
-                    }
                 }
             }
 
@@ -559,35 +695,38 @@ int main_utf8(int argc, char** argv)
             uint32_t texture_format = default_texture_format;
             bool swizzled = false;
             switch (tex.type) {
-            case 0x00: break;
-            case 0x01: break;
-            case 0x02: break;
+            case 0x00: break;   // ???
+            case 0x01: break;   // ???
+            case 0x02: break;   // ???
 //            case 0x03: bpp = 64; break;
 //            case 0x04: bpp = 128; break;
-            case 0x06: texture_format = DDS_FORMAT_DXT1; break;
-//            case 0x07: texture_format = DDS_FORMAT_DXT3; break;
-            case 0x08: texture_format = DDS_FORMAT_DXT5; break;
-            case 0x09: swizzled = true; break;
+            case 0x06: texture_format = DDS_FORMAT_DXT1; break; // PS2??, PS3
+            case 0x07: texture_format = DDS_FORMAT_DXT3; break;
+            case 0x08: texture_format = DDS_FORMAT_DXT5; break; // PS3
+            case 0x09: swizzled = true; break;  // PS4
 //            case 0x0A: swizzled = true; break;
-            case 0x10: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
-            case 0x12: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
-            case 0x21: break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; break;
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; break;
-            case 0x45: texture_format = DDS_FORMAT_BGR; swizzled = true; break;
-            case 0x59: texture_format = DDS_FORMAT_DXT1; break;
-            case 0x5B: texture_format = DDS_FORMAT_DXT5; break;
-            case 0x5C: texture_format = DDS_FORMAT_BC4; break;
+            case 0x10: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;    // PSV
+            case 0x11: texture_format = DDS_FORMAT_DXT3; swizzled = true; break;    // PSV
+            case 0x12: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;    // PSV
+            case 0x21: break;   // Switch
+            case 0x3C: texture_format = DDS_FORMAT_DXT1; break; // 3DS
+            case 0x3D: texture_format = DDS_FORMAT_DXT1; break; // 3DS
+            case 0x45: texture_format = DDS_FORMAT_BGR; swizzled = true; break; // 3DS
+            case 0x59: texture_format = DDS_FORMAT_DXT1; break; // Win
+            case 0x5A: texture_format = DDS_FORMAT_DXT3; break; // Win
+            case 0x5B: texture_format = DDS_FORMAT_DXT5; break; // Win
+            case 0x5C: texture_format = DDS_FORMAT_BC4; break;  // Win
 //            case 0x5D: texture_format = DDS_FORMAT_ATI1; break;
-//            case 0x5E: texture_format = DDS_FORMAT_ATI2; break;
-            case 0x5F: texture_format = DDS_FORMAT_BC7; break;
-            case 0x60: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
-            case 0x62: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
+            case 0x5E: texture_format = DDS_FORMAT_BC6H; break; // Win
+            case 0x5F: texture_format = DDS_FORMAT_BC7; break;  // Win
+            case 0x60: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;    // PS4
+            case 0x61: texture_format = DDS_FORMAT_DXT3; swizzled = true; break;    // PS4
+            case 0x62: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;    // PS4
 //            case 0x63: texture_format = DDS_FORMAT_BC4; swizzled = true; break;
 //            case 0x64: texture_format = DDS_FORMAT_BC5; swizzled = true; break;
 //            case 0x65: texture_format = DDS_FORMAT_BC6; swizzled = true; break;
 //            case 0x66: texture_format = DDS_FORMAT_BC7; swizzled = true; break;
-//            case 0x72: texture_format = DDS_FORMAT_????; break;
+//            case 0x72: texture_format = DDS_FORMAT_????; break;   // Win
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type 0x%02x\n", tex.type);
                 goto out;
@@ -687,11 +826,15 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Can't update total size\n");
             goto out;
         }
-        // Update offset table
-        fseek(file, sizeof(hdr) + getv32(hdr.nb_textures) * sizeof(uint32_t), SEEK_SET);
-        for (uint32_t i = 0; i < getv32(hdr.nb_textures); i++)
-            offset_table[i] = getv32(offset_table[i]);
-        if (fwrite(offset_table, sizeof(uint32_t), getv32(hdr.nb_textures), file) != getv32(hdr.nb_textures)) {
+        // Update flag and offset tables
+        fseek(file, sizeof(hdr), SEEK_SET);
+        fix_endian32(flag_table, hdr.nb_textures);
+        if (fwrite(flag_table, sizeof(uint32_t), hdr.nb_textures, file) != hdr.nb_textures) {
+            fprintf(stderr, "ERROR: Can't update global flags\n");
+            goto out;
+        }
+        fix_endian32(offset_table, hdr.nb_textures);
+        if (fwrite(offset_table, sizeof(uint32_t), hdr.nb_textures, file) != hdr.nb_textures) {
             fprintf(stderr, "ERROR: Can't update texture offsets\n");
             goto out;
         }
@@ -716,12 +859,12 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: Can't read from '%s'\n", argv[argc - 1]);
             goto out;
         }
-        if ((magic != G1TG_LE_MAGIC) && (magic != G1TG_BE_MAGIC)) {
+        if ((magic != G1TG_MAGIC) && (magic != bswap_uint32(G1TG_MAGIC))) {
             fprintf(stderr, "ERROR: Not a G1T file (bad magic) or unsupported platform\n");
             goto out;
         }
-        if (magic == G1TG_BE_MAGIC)
-            data_endianness = big_endian;
+        if (magic == bswap_uint32(G1TG_MAGIC))
+            data_endianness = !platform_endianness;
         fseek(file, 0L, SEEK_END);
         uint32_t g1t_size = (uint32_t)ftell(file);
         fseek(file, 0L, SEEK_SET);
@@ -735,24 +878,21 @@ int main_utf8(int argc, char** argv)
         }
 
         g1t_header* hdr = (g1t_header*)buf;
-        if (data_endianness != platform_endianness) {
-            BSWAP_UINT32(hdr->magic);
-            BSWAP_UINT32(hdr->version);
-            BSWAP_UINT32(hdr->total_size);
-            BSWAP_UINT32(hdr->header_size);
-            BSWAP_UINT32(hdr->nb_textures);
-            BSWAP_UINT32(hdr->platform);
-            BSWAP_UINT32(hdr->extra_size);
-        }
+        fix_endian32(hdr, sizeof(g1t_header) / sizeof(uint32_t));
         if (hdr->total_size != g1t_size) {
             fprintf(stderr, "ERROR: File size mismatch\n");
             goto out;
         }
-        char version[5];
-        setbe32(version, hdr->version);
-        version[4] = 0;
-        if (hdr->version >> 16 != 0x3030)
-            fprintf(stderr, "WARNING: Potentially unsupported G1T version %s\n", version);
+        char version_string[5];
+        setbe32(version_string, hdr->version);
+        version_string[4] = 0;
+        if (hdr->version >> 16 != 0x3030 && hdr->version >> 16 != 0x3031)
+            fprintf(stderr, "WARNING: Potentially unsupported G1T version %s\n", version_string);
+        int version = atoi(version_string);
+        if (version == 0 || version > 10000) {
+            fprintf(stderr, "ERROR: Unexpected G1T version %s\n", version_string);
+            goto out;
+        }
         if (hdr->extra_size % sizeof(uint32_t)) {
             fprintf(stderr, "ERROR: Can't handle G1T files with global extra data that's not a multiple of %d\n",
                 (int)sizeof(uint32_t));
@@ -769,10 +909,11 @@ int main_utf8(int argc, char** argv)
         json = json_value_init_object();
         json_object_set_number(json_object(json), "json_version", JSON_VERSION);
         json_object_set_string(json_object(json), "name", _basename(argv[argc - 1]));
-        json_object_set_string(json_object(json), "version", version);
-        json_object_set_number(json_object(json), "nb_textures", hdr->nb_textures);
-        json_object_set_number(json_object(json), "platform", hdr->platform);
-        json_object_set_number(json_object(json), "extra_size", hdr->extra_size);
+        json_object_set_number(json_object(json), "version", version);
+        if (platform_to_name(hdr->platform) != NULL)
+            json_object_set_string(json_object(json), "platform", platform_to_name(hdr->platform));
+        else
+            json_object_set_number(json_object(json), "platform", hdr->platform);
         if (flip_image)
             json_object_set_boolean(json_object(json), "flip", true);
 
@@ -780,13 +921,12 @@ int main_utf8(int argc, char** argv)
         if (!list_only && !create_path(argv[argc - 1]))
             goto out;
 
-        JSON_Value* json_extra_flags_array = json_value_init_array();
-        JSON_Value* json_global_extra_data_array = json_value_init_array();
+        JSON_Value* json_extra_data_array = json_value_init_array();
         JSON_Value* json_textures_array = json_value_init_array();
 
-        for (uint32_t i = 0; i < hdr->extra_size; i += sizeof(uint32_t))
-            json_array_append_number(json_array(json_global_extra_data_array),
-                getle32(&buf[hdr->header_size + hdr->nb_textures * sizeof(uint32_t) + i]));
+        for (uint16_t i = 0; i < hdr->extra_size; i += sizeof(uint16_t))
+            json_array_append_number(json_array(json_extra_data_array),
+                getp16(&buf[hdr->header_size + hdr->nb_textures * sizeof(uint32_t) + i]));
 
         printf("TYPE OFFSET     SIZE       NAME");
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
@@ -818,42 +958,59 @@ int main_utf8(int argc, char** argv)
 
         r = 0;
         for (uint32_t i = 0; i < hdr->nb_textures; i++) {
-            // There's an array of flags after the hdr
-            json_array_append_number(json_array(json_extra_flags_array),
-                getle32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]));
             uint32_t z_stack = 1, pos = hdr->header_size + getv32(x_offset_table[i]);
             g1t_tex_header* tex = (g1t_tex_header*)&buf[pos];
-            if (data_endianness != platform_endianness) {
+            if (data_endianness == big_endian) {
                 uint8_t swap_tmp = tex->dx;
                 tex->dx = tex->dy;
                 tex->dy = swap_tmp;
-                swap_tmp = tex->exts;
-                tex->exts = tex->mipmaps;
+                swap_tmp = tex->z_mipmaps;
+                tex->z_mipmaps = tex->mipmaps;
                 tex->mipmaps = swap_tmp;
-                // TODO: Not sure if we need to apply the same to hflags...
-                tex->lflags = ((tex->lflags & 0xf0f0f0f0) >> 4) | ((tex->lflags & 0x0f0f0f0f) << 4);
+            } else {
+                for (int j = 0; j < ARRAYSIZE(tex->flags); j++)
+                    tex->flags[j] = tex->flags[j] >> 4 | tex->flags[j] << 4;
             }
-            uint64_t flags = (uint64_t)tex->hflags << 32 | tex->lflags;
+            // We're going to assume that the global flags (the ones after the G1T global header)
+            // never see a value higher than 0x00ffffff, so that we can concatenate all the main
+            // texture flags together. We're also going to assume that the first 8 bytes in the
+            // extra data (after the extra data size) are additionnal flags in big-endian.
+            uint64_t flags[2];
+            flags[0] = (uint64_t)getp32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]);
+            if (flags[0] & 0xff000000ULL) {
+                r = -1;
+                fprintf(stderr, "ERROR: Global flags 0x%08x don't match our assertion\n", (uint32_t)flags[0]);
+                fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+                goto out;
+            }
+            for (int j = 0; j < ARRAYSIZE(tex->flags); j++)
+                flags[0] = flags[0] << 8 | (uint64_t)tex->flags[j];
             pos += sizeof(g1t_tex_header);
             uint32_t width = 1 << tex->dx;
             uint32_t height = 1 << tex->dy;
-            uint32_t extra_size = (flags & G1T_FLAG_LOCAL_XDATA) ? getp32(&buf[pos]) : 0;
-            // Non power-of-two width and height may be provided in the extra data
-            if (extra_size >= 0x14) {
-                if (width == 1)
-                    width = getp32(&buf[pos + 0x0c]);
-                if (height == 1)
-                    height = getp32(&buf[pos + 0x10]);
+            uint32_t data_size = (flags[0] & G1T_FLAG_EXTENDED_DATA) ? getp32(&buf[pos]) : 0;
+            if (data_size != 0 && data_size != 0x0c && data_size != 0x10 && data_size != 0x14) {
+                r = -1;
+                fprintf(stderr, "ERROR: Extra flags size of 0x%x doesn't match our assertion\n", data_size);
+                fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+                goto out;
             }
+            // Non power-of-two width and height may be provided in the data
+            if (data_size >= 0x0c)
+                flags[1] = getbe64(&buf[pos + 4]);
+            if (data_size >= 0x10)
+                width = getp32(&buf[pos + 0x0c]);
+            if (data_size >= 0x14)
+                height = getp32(&buf[pos + 0x10]);
 
             JSON_Value* json_texture = json_value_init_object();
             snprintf(path, sizeof(path), "%03d.dds", i);
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "mipmaps", tex->mipmaps);
-            json_object_set_number(json_object(json_texture), "flags", (double)flags);
-            if (tex->exts != 0)
-                json_object_set_number(json_object(json_texture), "exts", tex->exts);
+            json_object_set_value(json_object(json_texture), "flags", flags_to_json(flags));
+            if (tex->z_mipmaps != 0)
+                json_object_set_number(json_object(json_texture), "z_mipmaps", tex->z_mipmaps);
             uint32_t texture_format = default_texture_format;
             bool swizzled = false;
             switch (tex->type) {
@@ -877,7 +1034,7 @@ int main_utf8(int argc, char** argv)
             case 0x5B: texture_format = DDS_FORMAT_DXT5; break;
             case 0x5C: texture_format = DDS_FORMAT_BC4; break;
 //            case 0x5D: texture_format = DDS_FORMAT_ATI1; break;
-//            case 0x5E: texture_format = DDS_FORMAT_ATI2; break;
+            case 0x5E: texture_format = DDS_FORMAT_BC6H; break;
             case 0x5F: texture_format = DDS_FORMAT_BC7; break;
             case 0x60: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
             case 0x62: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
@@ -898,21 +1055,15 @@ int main_utf8(int argc, char** argv)
             uint32_t texture_size = ((i + 1 == hdr->nb_textures) ?
                 g1t_size - hdr->header_size : getv32(x_offset_table[i + 1])) - getv32(x_offset_table[i]);
             texture_size -= (uint32_t)sizeof(g1t_tex_header);
-            if (flags & G1T_FLAG_LOCAL_XDATA) {
-                assert(pos + extra_size < g1t_size);
-                if ((extra_size < 8) || (extra_size % 4 != 0)) {
-                    fprintf(stderr, "ERROR: Can't handle local extra_data of size 0x%08x\n", extra_size);
+            if (flags[0] & G1T_FLAG_EXTENDED_DATA) {
+                assert(pos + data_size < g1t_size);
+                if ((data_size != 0x0c) && (data_size != 0x10) && (data_size != 0x14)) {
+                    fprintf(stderr, "ERROR: Can't handle local extra_data of size 0x%08x\n", data_size);
                     r = -1;
                     continue;
-                } else if (!list_only) {
-                    JSON_Value* json_extra_array_val = json_value_init_array();
-                    JSON_Array* json_extra_array_obj = json_array(json_extra_array_val);
-                    for (uint32_t j = 4; j < extra_size; j += 4)
-                        json_array_append_number(json_extra_array_obj, getp32(&buf[pos + j]));
-                    json_object_set_value(json_object(json_texture), "extra_data", json_extra_array_val);
                 }
-                pos += extra_size;
-                texture_size -= extra_size;
+                pos += data_size;
+                texture_size -= data_size;
             }
             if (texture_size < expected_texture_size) {
                 fprintf(stderr, "ERROR: Actual texture size is smaller than expected size\n");
@@ -923,7 +1074,8 @@ int main_utf8(int argc, char** argv)
                     fprintf(stderr, "WARNING: Actual texture size is 0x%x bytes larger than expected size 0x%x\n",
                         texture_size - expected_texture_size, expected_texture_size);
                 z_stack = texture_size / expected_texture_size;
-                json_object_set_number(json_object(json_texture), "z_stack", z_stack);
+                if (z_stack != 1)
+                    json_object_set_number(json_object(json_texture), "z_stack", z_stack);
                 expected_texture_size = texture_size;
             }
 
@@ -951,7 +1103,7 @@ int main_utf8(int argc, char** argv)
                 continue;
             }
             if (write_dds_header(dst, texture_format, width, height * z_stack,
-                                 tex->mipmaps, flags) != 1) {
+                                 tex->mipmaps, flags[0]) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
                 r = -1;
@@ -994,7 +1146,7 @@ int main_utf8(int argc, char** argv)
                     break;
                 }
                 uint32_t offset = 0;
-                assert(mo != 0);
+//                assert(mo != 0);
                 for (int j = 1; j <= tex->mipmaps && mo != 0; j++) {
                     uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, width, height);
                     mortonize(texture_format, mo, width / (1 << (j - 1)), height / (1 << (j - 1)),
@@ -1014,12 +1166,11 @@ int main_utf8(int argc, char** argv)
             json_array_append_value(json_array(json_textures_array), json_texture);
         }
 
-        json_object_set_value(json_object(json), "extra_flags", json_extra_flags_array);
-        if (hdr->extra_size)
-            json_object_set_value(json_object(json), "extra_data", json_global_extra_data_array);
-        else
-            json_value_free(json_global_extra_data_array);
         json_object_set_value(json_object(json), "textures", json_textures_array);
+        if (hdr->extra_size)
+            json_object_set_value(json_object(json), "extra_data", json_extra_data_array);
+        else
+            json_value_free(json_extra_data_array);
         snprintf(path, sizeof(path), "%s%cg1t.json", argv[argc - 1], PATH_SEP);
         if (!list_only)
             json_serialize_to_file_pretty(json, path);
@@ -1032,6 +1183,7 @@ out:
     free(buf);
     free(dir);
     free(offset_table);
+    free(flag_table);
     if (file != NULL)
         fclose(file);
 

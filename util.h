@@ -32,7 +32,7 @@
 #pragma once
 
 // Flags to indicate whether the data being processed or the platform are Big Endian
-typedef enum { big_endian, little_endian } endianness;
+typedef enum { big_endian = 0, little_endian = !0 } endianness;
 extern endianness data_endianness;
 extern const endianness platform_endianness;
 
@@ -127,7 +127,7 @@ char* _dirname_unix(const char* path);
 #define BSWAP_UINT32(x) x = bswap_uint32(x)
 #define BSWAP_UINT64(x) x = bswap_uint64(x)
 
-// Returns the position of the msb. v should be nonzero
+// Returns the position of the msb/lsb. v should be nonzero
 static __inline uint32_t find_msb(uint32_t v)
 {
 #if defined (_MSC_VER)
@@ -136,6 +136,17 @@ static __inline uint32_t find_msb(uint32_t v)
     return pos;
 #else
     return 31- __builtin_clz(v);
+#endif
+}
+
+static __inline uint32_t find_lsb(uint64_t v)
+{
+#if defined (_MSC_VER)
+    DWORD pos;
+    _BitScanForward64(&pos, v);
+    return pos;
+#else
+    return __builtin_ctzll(v);
 #endif
 }
 
@@ -261,6 +272,13 @@ static __inline uint32_t getv32(uint32_t v)
 static __inline uint32_t getp32(const void* p)
 {
     return getv32(*(const uint32_t*)(const uint8_t*)(p));
+}
+
+static __inline void fix_endian32(void* buffer, size_t nb_elts)
+{
+    if (platform_endianness != data_endianness)
+        for (size_t i = 0; i < nb_elts; i++)
+            BSWAP_UINT32(((uint32_t*)buffer)[i]);
 }
 
 static __inline uint64_t getle64(const void* p)

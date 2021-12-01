@@ -23,7 +23,7 @@
 #include "utf8.h"
 #include "util.h"
 
-// Flag to indicate whether the data being processed or the platform are Big Endian
+// Flags to indicate the endianness of the data being processed as well as the platform
 endianness data_endianness = little_endian;
 const endianness platform_endianness = little_endian;
 

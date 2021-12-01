@@ -107,6 +107,7 @@ static __inline unsigned int dds_bwh(enum DDS_FORMAT f) {
     case DDS_FORMAT_BC4:
     case DDS_FORMAT_BC5:
     case DDS_FORMAT_BC6:
+    case DDS_FORMAT_BC6H:
     case DDS_FORMAT_BC7:
     case DDS_FORMAT_ATI1:
     case DDS_FORMAT_ATI2:
@@ -140,6 +141,7 @@ static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
     case DDS_FORMAT_DX10:
     case DDS_FORMAT_BC5:
     case DDS_FORMAT_BC6:
+    case DDS_FORMAT_BC6H:
     case DDS_FORMAT_BC7:
     case DDS_FORMAT_ATI2:
         return 16;
@@ -174,6 +176,7 @@ static __inline unsigned int dds_bpp(enum DDS_FORMAT f) {
     case DDS_FORMAT_DX10:
     case DDS_FORMAT_BC5:
     case DDS_FORMAT_BC6:
+    case DDS_FORMAT_BC6H:
     case DDS_FORMAT_BC7:
     case DDS_FORMAT_ATI2:
         return 8;
