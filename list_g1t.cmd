@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
-set EXT=gmpk
-set TARGET=E:\SteamLibrary\steamapps\common\FATAL FRAME MOBW
+set EXT=g1t
+set TARGET=E:\SteamLibrary\steamapps\common\BLUE REFLECTION Second Light
 
 call build.cmd %EXT%
 if %ERRORLEVEL% neq 0 goto err

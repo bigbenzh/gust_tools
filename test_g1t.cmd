@@ -13,6 +13,7 @@ if %ERRORLEVEL% neq 0 goto err
 
 set list=^
   type_01_sw^
+  type_01_win^
   type_08_ps3^
   type_09_ps4^
   type_10_psv^

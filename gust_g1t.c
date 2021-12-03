@@ -37,7 +37,6 @@
 #define G1T_FLAG_SRGB           0x000000002000ULL // Set if the texture uses sRGB
 #define G1T_FLAG_NORMAL_MAP     0x030000000000ULL // Usually set for normal maps (but not always)
 #define G1T_FLAG_SURFACE_TEX    0x000000000001ULL // Set for textures that appear on a model's surface
-#define G1T_FLAG_Z_STACKED      0x000020000000ULL // Set if the texture has a Z-stack
 
 // Known platforms
 #define SONY_PS2                0x00
@@ -85,7 +84,8 @@ typedef struct {
 #pragma pack(pop)
 
 // Same order as enum DDS_FORMAT
-const char* argb_name[] = { NULL, NULL, "ABGR", "ARGB", "GRAB", "RGBA" };
+const char* argb_name[] = { NULL, "ABGR", "ARGB", "GRAB", "RGBA",
+                                  "ABGR", "ARGB", "GRAB", "RGBA" };
 
 static inline const char* platform_to_name(uint32_t platform)
 {
@@ -174,8 +174,6 @@ static void json_to_flags(uint64_t* flags, JSON_Array* json_flags_array)
             flags[0] |= G1T_FLAG_EXTENDED_DATA;
         else if (strcmp(flag_str, "SURFACE_TEXTURE") == 0)
             flags[1] |= G1T_FLAG_SURFACE_TEX;
-        else if (strcmp(flag_str, "Z_STACKED") == 0)
-            flags[1] |= G1T_FLAG_Z_STACKED;
         // Unnamed flags
         else if (strncmp(flag_str, "FLAG_", 5) == 0) {
             int val = atoi(&flag_str[5]);
@@ -207,7 +205,6 @@ static JSON_Value* flags_to_json(uint64_t* flags)
     CHECK_MASK(flags_copy[0], G1T_FLAG_SRGB, json_flags_array, "SRGB_COLORSPACE");
     CHECK_MASK(flags_copy[0], G1T_FLAG_EXTENDED_DATA, json_flags_array, "EXTENDED_DATA");
     CHECK_MASK(flags_copy[1], G1T_FLAG_SURFACE_TEX, json_flags_array, "SURFACE_TEXTURE");
-    CHECK_MASK(flags_copy[1], G1T_FLAG_Z_STACKED, json_flags_array, "Z_STACKED");
 
     // Unnamed flags
     for (int i = 0; i < 2; i++) {
@@ -223,8 +220,8 @@ static JSON_Value* flags_to_json(uint64_t* flags)
     return json_flags_array;
 }
 
-static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
-                               uint32_t height, uint32_t mipmaps, uint64_t flags)
+static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width, uint32_t height,
+                               uint32_t mipmaps, bool cubemap, uint64_t flags)
 {
     if ((fd == NULL) || (width == 0) || (height == 0))
         return 0;
@@ -232,11 +229,16 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
     DDS_HEADER header = { 0 };
     uint32_t bpp = dds_bpp(format);
     header.size = 124;
-    header.flags = DDS_HEADER_FLAGS_TEXTURE;
+    header.flags = DDS_HEADER_FLAGS_TEXTURE | DDS_HEADER_FLAGS_LINEARSIZE;
     header.height = height;
     header.width = width;
+    // Gimp complains when this is not set
+    if (dds_bpb(format) >= 8)
+        header.pitchOrLinearSize = ((width + 3) / 4) * ((height + 3) / 4) * dds_bpb(format);
+    else
+        header.pitchOrLinearSize = width * height * dds_bpb(format);
     header.ddspf.size = 32;
-    if (format == DDS_FORMAT_BGR) {
+    if (format == DDS_FORMAT_BGR8) {
         header.ddspf.flags = DDS_RGB;
         header.ddspf.RGBBitCount = bpp;
         switch (bpp) {
@@ -249,11 +251,17 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
             fprintf(stderr, "ERROR: Unsupported bits-per-pixel value %d\n", bpp);
             return 0;
         }
-    } else if (format >= DDS_FORMAT_ABGR && format <= DDS_FORMAT_RGBA) {
+    } else if (format >= DDS_FORMAT_ABGR4 && format <= DDS_FORMAT_RGBA8) {
         header.ddspf.flags = DDS_RGBA;
         header.ddspf.RGBBitCount = bpp;
-        // Always save as ARGB, to keep VS and PhotoShop happy
+        // Always save as ARGB, to keep VS, Gimp and Photoshop happy
         switch (bpp) {
+        case 16:
+            header.ddspf.RBitMask = 0x00000f00;
+            header.ddspf.GBitMask = 0x000000f0;
+            header.ddspf.BBitMask = 0x0000000f;
+            header.ddspf.ABitMask = 0x0000f000;
+            break;
         case 32:
             header.ddspf.RBitMask = 0x00ff0000;
             header.ddspf.GBitMask = 0x0000ff00;
@@ -277,7 +285,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
             fprintf(stderr, "ERROR: Unsupported bits-per-pixel value %d\n", bpp);
             return 0;
         }
-    } else if (format == DDS_FORMAT_R) {
+    } else if (format == DDS_FORMAT_R8) {
         header.ddspf.flags = DDS_RGBA;
         header.ddspf.RGBBitCount = bpp;
         header.ddspf.RBitMask = (uint32_t)((1ULL << bpp) - 1);
@@ -290,6 +298,10 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.mipMapCount = mipmaps;
         header.flags |= DDS_HEADER_FLAGS_MIPMAP;
         header.caps |= DDS_SURFACE_FLAGS_MIPMAP;
+    }
+    if (cubemap) {
+        header.caps |= DDS_SURFACE_FLAGS_CUBEMAP;
+        header.caps2 |= DDS_CUBEMAP_ALLFACES;
     }
     if (flags & G1T_FLAG_NORMAL_MAP)
         header.ddspf.flags |= DDS_NORMAL;
@@ -312,7 +324,7 @@ static void rgba_convert(const enum DDS_FORMAT format, const char* in,
 {
     uint32_t bits_per_pixel = dds_bpp(format);
     assert(bits_per_pixel % 8 == 0);
-    assert(format >= DDS_FORMAT_BGR && format <= DDS_FORMAT_RGBA);
+    assert(format >= DDS_FORMAT_ABGR4 && format <= DDS_FORMAT_RGBA8);
 
     const int rgba[4] = { 'R', 'G', 'B', 'A' };
     if (strcmp(in, out) == 0)
@@ -574,7 +586,7 @@ int main_utf8(int argc, char** argv)
         dir[get_trailing_slash(dir)] = 0;
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
-        printf("     DIMENSIONS MIPMAPS ZSTACK\n");
+        printf("     DIMENSIONS MIPMAPS PROPS\n");
         for (uint32_t i = 0; i < hdr.nb_textures; i++) {
             offset_table[i] = ftell(file) - hdr.header_size;
             JSON_Object* texture_entry = json_array_get_object(json_textures_array, i);
@@ -587,6 +599,8 @@ int main_utf8(int argc, char** argv)
                 tex.flags[ARRAYSIZE(tex.flags) - j - 1] = (uint8_t)(flags[0] >> (8 * j));
             flag_table[i] = (uint32_t)(flags[0] >> 40);
             uint32_t z_stack = json_object_get_uint32(texture_entry, "z_stack");
+            assert(z_stack < 0x10);
+            flags[1] |= ((uint64_t)z_stack) << 28;
             if (z_stack == 0)
                 z_stack = 1;
             // Read the DDS file
@@ -682,14 +696,14 @@ int main_utf8(int argc, char** argv)
             case NINTENDO_DS:
             case NINTENDO_3DS:
             case SONY_PS4:
-                default_texture_format = DDS_FORMAT_GRAB;
+                default_texture_format = DDS_FORMAT_GRAB8;
                 break;
             case SONY_PSV:
             case NINTENDO_SWITCH:
-                default_texture_format = DDS_FORMAT_ARGB;
+                default_texture_format = DDS_FORMAT_ARGB8;
                 break;
             default:    // PC and other platforms
-                default_texture_format = DDS_FORMAT_RGBA;
+                default_texture_format = DDS_FORMAT_RGBA8;
                 break;
             }
             uint32_t texture_format = default_texture_format;
@@ -709,9 +723,10 @@ int main_utf8(int argc, char** argv)
             case 0x11: texture_format = DDS_FORMAT_DXT3; swizzled = true; break;    // PSV
             case 0x12: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;    // PSV
             case 0x21: break;   // Switch
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; break; // 3DS
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; break; // 3DS
-            case 0x45: texture_format = DDS_FORMAT_BGR; swizzled = true; break; // 3DS
+            // 0x3C and 0x3D are definitely 16bpp, but after that...
+            case 0x3C: texture_format = DDS_FORMAT_ARGB4; break; // 3DS
+            case 0x3D: texture_format = DDS_FORMAT_ARGB4; break; // 3DS
+            case 0x45: texture_format = DDS_FORMAT_BGR8; swizzled = true; break; // 3DS
             case 0x59: texture_format = DDS_FORMAT_DXT1; break; // Win
             case 0x5A: texture_format = DDS_FORMAT_DXT3; break; // Win
             case 0x5B: texture_format = DDS_FORMAT_DXT5; break; // Win
@@ -736,6 +751,14 @@ int main_utf8(int argc, char** argv)
             for (int j = 0; j < tex.mipmaps; j++)
                 expected_texture_size += MIPMAP_SIZE(texture_format, j, dds_header->width, dds_header->height);
             expected_texture_size *= z_stack;
+            bool cubemap = dds_header->caps & DDS_SURFACE_FLAGS_CUBEMAP && dds_header->caps2 & DDS_CUBEMAP_ALLFACES;
+            if (cubemap) {
+                if ((dds_header->caps2 & DDS_CUBEMAP_ALLFACES) != DDS_CUBEMAP_ALLFACES) {
+                    fprintf(stderr, "ERROR: Cannot handle cube maps with missing faces\n");
+                    goto out;
+                }
+                expected_texture_size *= 6;
+            }
             if (expected_texture_size > texture_size) {
                 fprintf(stderr, "ERROR: expected_texture_size %8x > %8x\n", expected_texture_size, texture_size);
                 goto out;
@@ -753,8 +776,8 @@ int main_utf8(int argc, char** argv)
 
             switch (dds_header->ddspf.flags & (DDS_ALPHAPIXELS | DDS_FOURCC | DDS_RGB)) {
             case DDS_RGBA:
-                if ((dds_header->ddspf.RGBBitCount != 32) && (dds_header->ddspf.RGBBitCount != 64) &&
-                    (dds_header->ddspf.RGBBitCount != 128)) {
+                if ((dds_header->ddspf.RGBBitCount != 16) && (dds_header->ddspf.RGBBitCount != 32) &&
+                    (dds_header->ddspf.RGBBitCount != 64) && (dds_header->ddspf.RGBBitCount != 128)) {
                     fprintf(stderr, "ERROR: '%s' is not an ARGB texture we support\n", path);
                     goto out;
                 }
@@ -803,7 +826,7 @@ int main_utf8(int argc, char** argv)
                     mo += (mo > 0) ? -1 : +1;
                 }
             }
-            if (texture_format >= DDS_FORMAT_ABGR && texture_format <= DDS_FORMAT_RGBA)
+            if (texture_format >= DDS_FORMAT_ABGR4 && texture_format <= DDS_FORMAT_RGBA8)
                 rgba_convert(texture_format, "ARGB", argb_name[texture_format], dds_payload, texture_size);
 
             // Write texture
@@ -811,11 +834,17 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "ERROR: Can't write texture data\n");
                 goto out;
             }
-            char dims[16];
+            char dims[16] = { 0 }, props[8] = { 0 };
             snprintf(dims, sizeof(dims), "%dx%d", dds_header->width, dds_header->height);
-            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex.type, getv32(hdr.header_size) + offset_table[i],
-                (uint32_t)ftell(file) - offset_table[i] - getv32(hdr.header_size) - (uint32_t)sizeof(g1t_tex_header), path,
-                dims, tex.mipmaps, z_stack);
+            if (cubemap)
+                strcat(props, "C");
+            if (z_stack > 1)
+                strcat(props, "Z");
+            if (props[0] == 0)
+                props[0] = '-';
+            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex.type, getv32(hdr.header_size) + offset_table[i],
+                (uint32_t)ftell(file) - offset_table[i] - getv32(hdr.header_size) - (uint32_t)sizeof(g1t_tex_header),
+                path, dims, tex.mipmaps, props);
             free(buf);
             buf = NULL;
         }
@@ -931,7 +960,7 @@ int main_utf8(int argc, char** argv)
         printf("TYPE OFFSET     SIZE       NAME");
         for (size_t i = 0; i < strlen(_basename(argv[argc - 1])); i++)
             putchar(' ');
-        printf("     DIMENSIONS MIPMAPS ZSTACK\n");
+        printf("     DIMENSIONS MIPMAPS PROPS\n");
         dir = strdup(argv[argc - 1]);
         if (dir == NULL) {
             fprintf(stderr, "ERROR: Alloc error\n");
@@ -945,20 +974,21 @@ int main_utf8(int argc, char** argv)
         case NINTENDO_DS:
         case NINTENDO_3DS:
         case SONY_PS4:
-            default_texture_format = DDS_FORMAT_GRAB;
+            default_texture_format = DDS_FORMAT_GRAB8;
             break;
         case SONY_PSV:
         case NINTENDO_SWITCH:
-            default_texture_format = DDS_FORMAT_ARGB;
+            default_texture_format = DDS_FORMAT_ARGB8;
             break;
         default:    // PC and other platforms
-            default_texture_format = DDS_FORMAT_RGBA;
+            default_texture_format = DDS_FORMAT_RGBA8;
             break;
         }
 
-        r = 0;
-        for (uint32_t i = 0; i < hdr->nb_textures; i++) {
-            uint32_t z_stack = 1, pos = hdr->header_size + getv32(x_offset_table[i]);
+        uint32_t i;
+        for (i = 0; i < hdr->nb_textures; i++) {
+            bool cubemap = false;
+            uint32_t z_stack = 0, pos = hdr->header_size + getv32(x_offset_table[i]);
             g1t_tex_header* tex = (g1t_tex_header*)&buf[pos];
             if (data_endianness == big_endian) {
                 uint8_t swap_tmp = tex->dx;
@@ -975,13 +1005,12 @@ int main_utf8(int argc, char** argv)
             // never see a value higher than 0x00ffffff, so that we can concatenate all the main
             // texture flags together. We're also going to assume that the first 8 bytes in the
             // extra data (after the extra data size) are additionnal flags in big-endian.
-            uint64_t flags[2];
+            uint64_t flags[2] = { 0, 0 };
             flags[0] = (uint64_t)getp32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]);
             if (flags[0] & 0xff000000ULL) {
-                r = -1;
                 fprintf(stderr, "ERROR: Global flags 0x%08x don't match our assertion\n", (uint32_t)flags[0]);
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
-                goto out;
+                break;
             }
             for (int j = 0; j < ARRAYSIZE(tex->flags); j++)
                 flags[0] = flags[0] << 8 | (uint64_t)tex->flags[j];
@@ -990,14 +1019,19 @@ int main_utf8(int argc, char** argv)
             uint32_t height = 1 << tex->dy;
             uint32_t data_size = (flags[0] & G1T_FLAG_EXTENDED_DATA) ? getp32(&buf[pos]) : 0;
             if (data_size != 0 && data_size != 0x0c && data_size != 0x10 && data_size != 0x14) {
-                r = -1;
                 fprintf(stderr, "ERROR: Extra flags size of 0x%x doesn't match our assertion\n", data_size);
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
-                goto out;
+                break;
             }
-            // Non power-of-two width and height may be provided in the data
-            if (data_size >= 0x0c)
+            // Extra flags, including a Z-Stack factor, may be provided
+            if (data_size >= 0x0c) {
                 flags[1] = getbe64(&buf[pos + 4]);
+                z_stack = (uint32_t)(flags[1] >> 28) & 0x0f;
+                flags[1] &= ~0xf0000000ULL;
+            }
+            if (z_stack == 0)
+                z_stack = 1;
+            // Non power-of-two width and height may be provided in the data
             if (data_size >= 0x10)
                 width = getp32(&buf[pos + 0x0c]);
             if (data_size >= 0x14)
@@ -1008,9 +1042,11 @@ int main_utf8(int argc, char** argv)
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
             json_object_set_number(json_object(json_texture), "mipmaps", tex->mipmaps);
-            json_object_set_value(json_object(json_texture), "flags", flags_to_json(flags));
             if (tex->z_mipmaps != 0)
                 json_object_set_number(json_object(json_texture), "z_mipmaps", tex->z_mipmaps);
+            if (z_stack > 1)
+                json_object_set_number(json_object(json_texture), "z_stack", z_stack);
+            json_object_set_value(json_object(json_texture), "flags", flags_to_json(flags));
             uint32_t texture_format = default_texture_format;
             bool swizzled = false;
             switch (tex->type) {
@@ -1027,9 +1063,9 @@ int main_utf8(int argc, char** argv)
             case 0x10: texture_format = DDS_FORMAT_DXT1; swizzled = true; break;
             case 0x12: texture_format = DDS_FORMAT_DXT5; swizzled = true; break;
             case 0x21: break;
-            case 0x3C: texture_format = DDS_FORMAT_DXT1; break;
-            case 0x3D: texture_format = DDS_FORMAT_DXT1; break;
-            case 0x45: texture_format = DDS_FORMAT_BGR; swizzled = true; break;
+            case 0x3C: texture_format = DDS_FORMAT_ARGB4; break;
+            case 0x3D: texture_format = DDS_FORMAT_ARGB4; break;
+            case 0x45: texture_format = DDS_FORMAT_BGR8; swizzled = true; break;
             case 0x59: texture_format = DDS_FORMAT_DXT1; break;
             case 0x5B: texture_format = DDS_FORMAT_DXT5; break;
             case 0x5C: texture_format = DDS_FORMAT_BC4; break;
@@ -1046,12 +1082,11 @@ int main_utf8(int argc, char** argv)
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 fprintf(stderr, "Please visit: https://github.com/VitaSmith/gust_tools/issues/51\n");
-                r = -1;
-                continue;
+                goto out;
             }
             uint32_t expected_texture_size = 0;
             for (int j = 0; j < tex->mipmaps; j++)
-                expected_texture_size += MIPMAP_SIZE(texture_format, j, width, height);
+                expected_texture_size += z_stack * MIPMAP_SIZE(texture_format, j, width, height);
             uint32_t texture_size = ((i + 1 == hdr->nb_textures) ?
                 g1t_size - hdr->header_size : getv32(x_offset_table[i + 1])) - getv32(x_offset_table[i]);
             texture_size -= (uint32_t)sizeof(g1t_tex_header);
@@ -1059,32 +1094,42 @@ int main_utf8(int argc, char** argv)
                 assert(pos + data_size < g1t_size);
                 if ((data_size != 0x0c) && (data_size != 0x10) && (data_size != 0x14)) {
                     fprintf(stderr, "ERROR: Can't handle local extra_data of size 0x%08x\n", data_size);
-                    r = -1;
-                    continue;
+                    break;
                 }
                 pos += data_size;
                 texture_size -= data_size;
             }
             if (texture_size < expected_texture_size) {
                 fprintf(stderr, "ERROR: Actual texture size is smaller than expected size\n");
-                r = -1;
-                continue;
+                break;
             } else if (texture_size > expected_texture_size) {
-                if (texture_size % expected_texture_size != 0)
+                if (texture_size % expected_texture_size != 0) {
                     fprintf(stderr, "WARNING: Actual texture size is 0x%x bytes larger than expected size 0x%x\n",
                         texture_size - expected_texture_size, expected_texture_size);
-                z_stack = texture_size / expected_texture_size;
-                if (z_stack != 1)
-                    json_object_set_number(json_object(json_texture), "z_stack", z_stack);
+                } else if (texture_size / expected_texture_size == 6) {
+                    // A cubemap is composed of one texture for each face
+                    cubemap = true;
+                } else {
+                    fprintf(stderr, "ERROR: Stacked texture with factor of %d doesn't match our assertion\n",
+                        texture_size / expected_texture_size);
+                    fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+                    break;
+                }
                 expected_texture_size = texture_size;
             }
 
             snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
-            char dims[16];
+            char dims[16] = { 0 }, props[8] = { 0 };
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
-            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %-6d\n", tex->type,
+            if (cubemap)
+                strcat(props, "C");
+            if (z_stack > 1)
+                strcat(props, "Z");
+            if (props[0] == 0)
+                props[0] = '-';
+            printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex->type,
                 hdr->header_size + hdr->extra_size + getv32(x_offset_table[i]),
-                texture_size, &path[strlen(dir)], dims, tex->mipmaps, z_stack);
+                texture_size, &path[strlen(dir)], dims, tex->mipmaps, props);
             if (list_only) {
                 json_value_free(json_texture);
                 continue;
@@ -1092,41 +1137,28 @@ int main_utf8(int argc, char** argv)
             FILE* dst = fopen_utf8(path, "wb");
             if (dst == NULL) {
                 fprintf(stderr, "ERROR: Can't create file '%s'\n", path);
-                r = -1;
-                continue;
+                break;
             }
             uint32_t dds_magic = DDS_MAGIC;
             if (fwrite(&dds_magic, sizeof(dds_magic), 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write magic\n");
                 fclose(dst);
                 r = -1;
-                continue;
+                break;
             }
             if (write_dds_header(dst, texture_format, width, height * z_stack,
-                                 tex->mipmaps, flags[0]) != 1) {
+                                 tex->mipmaps, cubemap, flags[0]) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
-                r = -1;
-                continue;
+                break;
             }
 
             // Non ARGB textures require conversion to be applied, since
             // tools like Visual Studio or PhotoShop can't be bothered
             // to honour the pixel format from the DDS header and instead
             // insist on using ARGB always...
-            switch (texture_format) {
-            case DDS_FORMAT_RGBA:
-                rgba_convert(texture_format, "RGBA", "ARGB", &buf[pos], expected_texture_size);
-                break;
-            case DDS_FORMAT_ABGR:
-                rgba_convert(texture_format, "ABGR", "ARGB", &buf[pos], expected_texture_size);
-                break;
-            case DDS_FORMAT_GRAB:
-                rgba_convert(texture_format, "GRAB", "ARGB", &buf[pos], expected_texture_size);
-                break;
-            default:
-                break;
-            }
+            if (texture_format >= DDS_FORMAT_ABGR4 && texture_format <= DDS_FORMAT_RGBA8)
+                rgba_convert(texture_format, argb_name[texture_format], "ARGB", &buf[pos], expected_texture_size);
             if (swizzled) {
                 int16_t mo = 0;     // Morton order
                 uint32_t wf = 1;    // Width factor
@@ -1160,11 +1192,12 @@ int main_utf8(int argc, char** argv)
             if (fwrite(&buf[pos], expected_texture_size, 1, dst) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS data\n");
                 fclose(dst);
-                continue;
+                break;
             }
             fclose(dst);
             json_array_append_value(json_array(json_textures_array), json_texture);
         }
+        r = (i == hdr->nb_textures) ? 0 : -1;
 
         json_object_set_value(json_object(json), "textures", json_textures_array);
         if (hdr->extra_size)
@@ -1174,8 +1207,6 @@ int main_utf8(int argc, char** argv)
         snprintf(path, sizeof(path), "%s%cg1t.json", argv[argc - 1], PATH_SEP);
         if (!list_only)
             json_serialize_to_file_pretty(json, path);
-
-        r = 0;
     }
 
 out:

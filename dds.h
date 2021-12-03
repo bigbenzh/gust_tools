@@ -68,13 +68,17 @@
 
 enum DDS_FORMAT {
     DDS_FORMAT_UNKNOWN,
-    DDS_FORMAT_BGR,                 // Should be the first uncompressed format with RGBA components
-    DDS_FORMAT_ABGR,                // as needed per rgba_convert() format validation.
-    DDS_FORMAT_ARGB,
-    DDS_FORMAT_GRAB,
-    DDS_FORMAT_RGBA,                // Should be the last uncompressed format with RGBA components
-    DDS_FORMAT_RXGB,
-    DDS_FORMAT_R,
+    DDS_FORMAT_ABGR4,               // Should be the first uncompressed format with RGBA components
+    DDS_FORMAT_ARGB4,               // as needed per rgba_convert() format validation.
+    DDS_FORMAT_GRAB4,
+    DDS_FORMAT_RGBA4,
+    DDS_FORMAT_ABGR8,
+    DDS_FORMAT_ARGB8,
+    DDS_FORMAT_GRAB8,
+    DDS_FORMAT_RGBA8,               // Should be the last uncompressed format with RGBA components
+    DDS_FORMAT_RXGB8,
+    DDS_FORMAT_BGR8,
+    DDS_FORMAT_R8,
     DDS_FORMAT_UVER,
     DDS_FORMAT_DXT1,
     DDS_FORMAT_DXT2,
@@ -120,15 +124,20 @@ static __inline unsigned int dds_bwh(enum DDS_FORMAT f) {
 // DDS format: Bytes per pixel block
 static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
     switch (f) {
-    case DDS_FORMAT_BGR:
+    case DDS_FORMAT_BGR8:
         return 3;
-    case DDS_FORMAT_ABGR:
-    case DDS_FORMAT_ARGB:
-    case DDS_FORMAT_GRAB:
-    case DDS_FORMAT_RGBA:
-    case DDS_FORMAT_RXGB:
+    case DDS_FORMAT_ABGR8:
+    case DDS_FORMAT_ARGB8:
+    case DDS_FORMAT_GRAB8:
+    case DDS_FORMAT_RGBA8:
+    case DDS_FORMAT_RXGB8:
         return 4;
-    case DDS_FORMAT_R:
+    case DDS_FORMAT_ABGR4:
+    case DDS_FORMAT_ARGB4:
+    case DDS_FORMAT_GRAB4:
+    case DDS_FORMAT_RGBA4:
+        return 2;
+    case DDS_FORMAT_R8:
         return 1;
     case DDS_FORMAT_DXT1:
     case DDS_FORMAT_BC4:
@@ -155,15 +164,20 @@ static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
 // DDS format: Bits per individual pixel
 static __inline unsigned int dds_bpp(enum DDS_FORMAT f) {
     switch (f) {
-    case DDS_FORMAT_BGR:
+    case DDS_FORMAT_BGR8:
         return 24;
-    case DDS_FORMAT_ABGR:
-    case DDS_FORMAT_ARGB:
-    case DDS_FORMAT_GRAB:
-    case DDS_FORMAT_RGBA:
-    case DDS_FORMAT_RXGB:
+    case DDS_FORMAT_ABGR8:
+    case DDS_FORMAT_ARGB8:
+    case DDS_FORMAT_GRAB8:
+    case DDS_FORMAT_RGBA8:
+    case DDS_FORMAT_RXGB8:
         return 32;
-    case DDS_FORMAT_R:
+    case DDS_FORMAT_ABGR4:
+    case DDS_FORMAT_ARGB4:
+    case DDS_FORMAT_GRAB4:
+    case DDS_FORMAT_RGBA4:
+        return 16;
+    case DDS_FORMAT_R8:
         return 8;
     case DDS_FORMAT_DXT1:
     case DDS_FORMAT_BC4:
@@ -407,7 +421,7 @@ static __inline uint32_t get_fourCC(int format)
         return MAKEFOURCC('N', 'V', 'T', 'T');
     case DDS_FORMAT_DDS:
         return MAKEFOURCC('D', 'D', 'S', ' ');
-    case DDS_FORMAT_RXGB:
+    case DDS_FORMAT_RXGB8:
         return MAKEFOURCC('R', 'X', 'G', 'B');
     case DDS_FORMAT_UVER:
         return MAKEFOURCC('U', 'V', 'E', 'R');
