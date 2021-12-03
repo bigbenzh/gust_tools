@@ -57,7 +57,7 @@ typedef struct {
 typedef struct {
     uint32_t offset;
     uint32_t size;
-    char     filename[32];      // May be extended by (filename_size << 4)
+    char     filename[0x20];    // May be extended by (filename_size * 0x10)
 } lxr_entry;
 #pragma pack(pop)
 
@@ -81,7 +81,7 @@ int32_t decompress_mem_to_mem(void* pOut_buf, size_t out_buf_len, const void* pS
 int main_utf8(int argc, char** argv)
 {
     int r = -1;
-    char path[256];
+    char path[256], *filename = NULL;
     uint8_t *buf = NULL, *zbuf = NULL;
     uint32_t zsize, lxr_entry_size = sizeof(lxr_entry);
     FILE *file = NULL, *dst = NULL;
@@ -183,7 +183,7 @@ int main_utf8(int argc, char** argv)
                     goto out;
             }
             strncpy(entry->filename, json_array_get_string(json_files_array, i),
-                0x20 + ((size_t)hdr.filename_size << 4));
+                0x20 + ((size_t)hdr.filename_size * 0x10));
             printf("%08x %08x %s\n", entry->offset, entry->size, path);
             if ((entry->size != 0) && (fwrite(buf, 1, entry->size, file) != entry->size)) {
                 fprintf(stderr, "ERROR: Can't add file data\n");
@@ -398,8 +398,13 @@ increase_buf_size:
         for (uint32_t i = 0; i < hdr->nb_files; i++) {
             lxr_entry* entry = (lxr_entry*)&buf[sizeof(lxr_header) + (size_t)i * lxr_entry_size];
             assert(entry->offset + entry->size <= (uint32_t)file_size);
-            json_array_append_string(json_array(json_files_array), entry->filename);
-            snprintf(path, sizeof(path), "%s%c%s", argv[argc - 1], PATH_SEP, entry->filename);
+            char* filename = calloc(0x20 + hdr->filename_size * 0x10 + 1, 1);
+            if (filename == NULL)
+                goto out;
+            memcpy(filename, entry->filename, 0x20 + hdr->filename_size * 0x10);
+            json_array_append_string(json_array(json_files_array), filename);
+            snprintf(path, sizeof(path), "%s%c%s", argv[argc - 1], PATH_SEP, filename);
+            free(filename);
             printf("%08x %08x %s\n", entry->offset, entry->size, path);
             if (list_only)
                 continue;
