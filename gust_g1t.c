@@ -37,6 +37,9 @@
 #define G1T_FLAG_SRGB           0x000000002000ULL // Set if the texture uses sRGB
 #define G1T_FLAG_NORMAL_MAP     0x030000000000ULL // Usually set for normal maps (but not always)
 #define G1T_FLAG_SURFACE_TEX    0x000000000001ULL // Set for textures that appear on a model's surface
+// The following are indicative flags, used only by this application
+#define G1T_FLAG_TEXTURE_ARRAY  0x0000FFFFFFFEULL
+#define G1T_FLAG_CUBE_MAP       0x000100000000ULL
 
 // Known platforms
 #define SONY_PS2                0x00
@@ -178,8 +181,8 @@ static void json_to_flags(uint64_t* flags, JSON_Array* json_flags_array)
         else if (strncmp(flag_str, "FLAG_", 5) == 0) {
             int val = atoi(&flag_str[5]);
             flags[0 + val / 64] |= 1ULL << (val % 64);
-        }
-        else {
+        } else if (strcmp(flag_str, "TEXTURE_ARRAY") != 0 &&
+            strcmp(flag_str, "CUBE_MAP") != 0) {
             fprintf(stderr, "ERROR: Unsupported JSON flag '%s'\n", flag_str);
         }
     }
@@ -192,10 +195,7 @@ static JSON_Value* flags_to_json(uint64_t* flags)
 {
     JSON_Value* json_flags_array = json_value_init_array();
     static char str[64] = { 0 };
-    uint64_t flags_copy[2] = { flags[0], 0 };
-
-    if (flags_copy[0] & 1ULL)
-        flags_copy[1] = flags[1];
+    uint64_t flags_copy[3] = { flags[0], flags[1], flags[2] };
 
     // Named flags
     CHECK_MASK(flags_copy[0], G1T_FLAG_STANDARD_FLAGS, json_flags_array, "STANDARD_FLAGS");
@@ -205,6 +205,9 @@ static JSON_Value* flags_to_json(uint64_t* flags)
     CHECK_MASK(flags_copy[0], G1T_FLAG_SRGB, json_flags_array, "SRGB_COLORSPACE");
     CHECK_MASK(flags_copy[0], G1T_FLAG_EXTENDED_DATA, json_flags_array, "EXTENDED_DATA");
     CHECK_MASK(flags_copy[1], G1T_FLAG_SURFACE_TEX, json_flags_array, "SURFACE_TEXTURE");
+    if (flags_copy[2] & G1T_FLAG_TEXTURE_ARRAY)
+        json_array_append_string(json_array(json_flags_array), "TEXTURE_ARRAY");
+    CHECK_MASK(flags_copy[2], G1T_FLAG_CUBE_MAP, json_flags_array, "CUBE_MAP");
 
     // Unnamed flags
     for (int i = 0; i < 2; i++) {
@@ -220,14 +223,15 @@ static JSON_Value* flags_to_json(uint64_t* flags)
     return json_flags_array;
 }
 
-static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width, uint32_t height,
-                               uint32_t mipmaps, bool cubemap, uint64_t flags)
+static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
+                               uint32_t height, uint32_t mipmaps, uint64_t* flags)
 {
     if ((fd == NULL) || (width == 0) || (height == 0))
         return 0;
 
     DDS_HEADER header = { 0 };
     uint32_t bpp = dds_bpp(format);
+    bool use_dx10 = (format == DDS_FORMAT_BC7) || (flags[2] & G1T_FLAG_TEXTURE_ARRAY);
     header.size = 124;
     header.flags = DDS_HEADER_FLAGS_TEXTURE | DDS_HEADER_FLAGS_LINEARSIZE;
     header.height = height;
@@ -252,7 +256,12 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
             return 0;
         }
     } else if (format >= DDS_FORMAT_ABGR4 && format <= DDS_FORMAT_RGBA8) {
-        header.ddspf.flags = DDS_RGBA;
+        if (use_dx10) {
+            header.ddspf.flags = DDS_FOURCC | DDS_ALPHAPIXELS;
+            header.ddspf.fourCC = get_fourCC(DDS_FORMAT_DX10);
+        } else {
+            header.ddspf.flags = DDS_RGBA;
+        }
         header.ddspf.RGBBitCount = bpp;
         // Always save as ARGB, to keep VS, Gimp and Photoshop happy
         switch (bpp) {
@@ -291,7 +300,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.ddspf.RBitMask = (uint32_t)((1ULL << bpp) - 1);
     } else {
         header.ddspf.flags = DDS_FOURCC;
-        header.ddspf.fourCC = get_fourCC(format);
+        header.ddspf.fourCC = get_fourCC(use_dx10 ? DDS_FORMAT_DX10 : format);
     }
     header.caps = DDS_SURFACE_FLAGS_TEXTURE;
     if (mipmaps != 0) {
@@ -299,21 +308,44 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.flags |= DDS_HEADER_FLAGS_MIPMAP;
         header.caps |= DDS_SURFACE_FLAGS_MIPMAP;
     }
-    if (cubemap) {
+    if (flags[2] & G1T_FLAG_CUBE_MAP) {
         header.caps |= DDS_SURFACE_FLAGS_CUBEMAP;
         header.caps2 |= DDS_CUBEMAP_ALLFACES;
     }
-    if (flags & G1T_FLAG_NORMAL_MAP)
+    if (flags[0] & G1T_FLAG_NORMAL_MAP)
         header.ddspf.flags |= DDS_NORMAL;
     size_t r = fwrite(&header, sizeof(DDS_HEADER), 1, fd);
     if (r != 1)
         return r;
-    if (format == DDS_FORMAT_BC7) {
+    if (use_dx10) {
         DDS_HEADER_DXT10 dxt10_hdr = { 0 };
-        dxt10_hdr.dxgiFormat = (flags & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
         dxt10_hdr.resourceDimension = D3D10_RESOURCE_DIMENSION_TEXTURE2D;
-        dxt10_hdr.miscFlags2 = DDS_ALPHA_MODE_STRAIGHT;
-        dxt10_hdr.arraySize = 1; // Must be set to 1 for 3D texture
+        assert((uint32_t)flags[2] != 0);
+        dxt10_hdr.arraySize = (uint32_t)flags[2];
+        dxt10_hdr.miscFlag = (flags[2] & G1T_FLAG_CUBE_MAP) ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
+        switch (format) {
+        case DDS_FORMAT_BC7:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
+            break;
+        case DDS_FORMAT_DXT1:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC1_UNORM_SRGB : DXGI_FORMAT_BC1_UNORM;
+            break;
+        case DDS_FORMAT_DXT3:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC2_UNORM_SRGB : DXGI_FORMAT_BC2_UNORM;
+            break;
+        case DDS_FORMAT_DXT5:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC3_UNORM_SRGB : DXGI_FORMAT_BC3_UNORM;
+            break;
+        case DDS_FORMAT_BC6H:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC6H_SF16 : DXGI_FORMAT_BC6H_UF16;
+            break;
+        case DDS_FORMAT_RGBA8:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
+            break;
+        default:
+            assert(false);
+            break;
+        }
         r = fwrite(&dxt10_hdr, sizeof(DDS_HEADER_DXT10), 1, fd);
     }
     return r;
@@ -598,11 +630,11 @@ int main_utf8(int argc, char** argv)
             for (int j = 0; j < ARRAYSIZE(tex.flags); j++)
                 tex.flags[ARRAYSIZE(tex.flags) - j - 1] = (uint8_t)(flags[0] >> (8 * j));
             flag_table[i] = (uint32_t)(flags[0] >> 40);
-            uint32_t z_stack = json_object_get_uint32(texture_entry, "z_stack");
-            assert(z_stack < 0x10);
-            flags[1] |= ((uint64_t)z_stack) << 28;
-            if (z_stack == 0)
-                z_stack = 1;
+            uint32_t nb_frames = json_object_get_uint32(texture_entry, "nb_frames");
+            assert(nb_frames < 0x10);
+            flags[1] |= ((uint64_t)nb_frames) << 28;
+            if (nb_frames == 0)
+                nb_frames = 1;
             // Read the DDS file
             snprintf(path, sizeof(path), "%s%s%c%s", dir, _basename(argv[argc - 1]), PATH_SEP,
                 json_object_get_string(texture_entry, "name"));
@@ -620,8 +652,6 @@ int main_utf8(int argc, char** argv)
             DDS_HEADER* dds_header = (DDS_HEADER*)&buf[sizeof(uint32_t)];
             texture_size -= sizeof(uint32_t) + sizeof(DDS_HEADER);
             uint8_t* dds_payload = (uint8_t*)&buf[sizeof(uint32_t) + sizeof(DDS_HEADER)];
-            // Adjust the height if we have a Z Stack
-            dds_header->height /= z_stack;
             // We may have a DXT10 additional header
             if (dds_header->ddspf.fourCC == get_fourCC(DDS_FORMAT_DX10)) {
                 texture_size -= sizeof(DDS_HEADER_DXT10);
@@ -750,7 +780,7 @@ int main_utf8(int argc, char** argv)
             uint32_t expected_texture_size = 0;
             for (int j = 0; j < tex.mipmaps; j++)
                 expected_texture_size += MIPMAP_SIZE(texture_format, j, dds_header->width, dds_header->height);
-            expected_texture_size *= z_stack;
+            expected_texture_size *= nb_frames;
             bool cubemap = dds_header->caps & DDS_SURFACE_FLAGS_CUBEMAP && dds_header->caps2 & DDS_CUBEMAP_ALLFACES;
             if (cubemap) {
                 if ((dds_header->caps2 & DDS_CUBEMAP_ALLFACES) != DDS_CUBEMAP_ALLFACES) {
@@ -818,6 +848,7 @@ int main_utf8(int argc, char** argv)
                 }
                 uint32_t offset = 0;
                 assert(mo != 0);
+                // TODO: We'll need to handle morton for texture arrays & cubemaps
                 for (int j = 1; j <= tex.mipmaps && mo != 0; j++) {
                     uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, dds_header->width, dds_header->height);
                     mortonize(texture_format, mo, dds_header->width / (1 << (j - 1)), dds_header->height / (1 << (j - 1)),
@@ -829,22 +860,32 @@ int main_utf8(int argc, char** argv)
             if (texture_format >= DDS_FORMAT_ABGR4 && texture_format <= DDS_FORMAT_RGBA8)
                 rgba_convert(texture_format, "ARGB", argb_name[texture_format], dds_payload, texture_size);
 
-            // Write texture
-            if (fwrite(dds_payload, 1, texture_size, file) != texture_size) {
-                fprintf(stderr, "ERROR: Can't write texture data\n");
-                goto out;
-            }
             char dims[16] = { 0 }, props[8] = { 0 };
             snprintf(dims, sizeof(dims), "%dx%d", dds_header->width, dds_header->height);
+            if (nb_frames > 1)
+                strcat(props, "A");     // Array
             if (cubemap)
-                strcat(props, "C");
-            if (z_stack > 1)
-                strcat(props, "Z");
+                strcat(props, "C");     // Cubemap
             if (props[0] == 0)
                 props[0] = '-';
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex.type, getv32(hdr.header_size) + offset_table[i],
                 (uint32_t)ftell(file) - offset_table[i] - getv32(hdr.header_size) - (uint32_t)sizeof(g1t_tex_header),
                 path, dims, tex.mipmaps, props);
+
+            if (cubemap)
+                nb_frames *= 6;     // Adjust effective nb_frames for cubemaps
+            // Inverse operation from the one we carry when extracting DDS
+            uint32_t f_size = texture_size / nb_frames;
+            for (uint32_t l = 0, offset = 0; l < tex.mipmaps; l++) {
+                uint32_t mipmap_size = MIPMAP_SIZE(texture_format, l, dds_header->width, dds_header->height);
+                for (uint32_t f = 0; f < nb_frames; f++) {
+                    if (fwrite(&dds_payload[f * f_size + offset], mipmap_size, 1, file) != 1) {
+                        fprintf(stderr, "ERROR: Can't write DDS data\n");
+                        goto out;
+                    }
+                }
+                offset += mipmap_size;
+            }
             free(buf);
             buf = NULL;
         }
@@ -987,8 +1028,7 @@ int main_utf8(int argc, char** argv)
 
         uint32_t i;
         for (i = 0; i < hdr->nb_textures; i++) {
-            bool cubemap = false;
-            uint32_t z_stack = 0, pos = hdr->header_size + getv32(x_offset_table[i]);
+            uint32_t nb_frames = 0, pos = hdr->header_size + getv32(x_offset_table[i]);
             g1t_tex_header* tex = (g1t_tex_header*)&buf[pos];
             if (data_endianness == big_endian) {
                 uint8_t swap_tmp = tex->dx;
@@ -1001,11 +1041,16 @@ int main_utf8(int argc, char** argv)
                 for (int j = 0; j < ARRAYSIZE(tex->flags); j++)
                     tex->flags[j] = tex->flags[j] >> 4 | tex->flags[j] << 4;
             }
+            if (tex->mipmaps == 0) {
+                fprintf(stderr, "ERROR: Number of mipmaps is 0\n");
+                fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
+                break;
+            }
             // We're going to assume that the global flags (the ones after the G1T global header)
             // never see a value higher than 0x00ffffff, so that we can concatenate all the main
             // texture flags together. We're also going to assume that the first 8 bytes in the
             // extra data (after the extra data size) are additionnal flags in big-endian.
-            uint64_t flags[2] = { 0, 0 };
+            uint64_t flags[3] = { 0 };
             flags[0] = (uint64_t)getp32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]);
             if (flags[0] & 0xff000000ULL) {
                 fprintf(stderr, "ERROR: Global flags 0x%08x don't match our assertion\n", (uint32_t)flags[0]);
@@ -1023,14 +1068,16 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                 break;
             }
-            // Extra flags, including a Z-Stack factor, may be provided
+            // Extra flags, including the number of frames, may be provided
             if (data_size >= 0x0c) {
                 flags[1] = getbe64(&buf[pos + 4]);
-                z_stack = (uint32_t)(flags[1] >> 28) & 0x0f;
+                nb_frames = (uint32_t)(flags[1] >> 28) & 0x0f;
                 flags[1] &= ~0xf0000000ULL;
             }
-            if (z_stack == 0)
-                z_stack = 1;
+            if (nb_frames == 0)
+                nb_frames = 1;
+            // Keep the number of frames in flags[2]
+            flags[2] |= nb_frames;
             // Non power-of-two width and height may be provided in the data
             if (data_size >= 0x10)
                 width = getp32(&buf[pos + 0x0c]);
@@ -1041,12 +1088,12 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%03d.dds", i);
             json_object_set_string(json_object(json_texture), "name", path);
             json_object_set_number(json_object(json_texture), "type", tex->type);
-            json_object_set_number(json_object(json_texture), "mipmaps", tex->mipmaps);
+            if (tex->mipmaps != 1)
+                json_object_set_number(json_object(json_texture), "mipmaps", tex->mipmaps);
             if (tex->z_mipmaps != 0)
                 json_object_set_number(json_object(json_texture), "z_mipmaps", tex->z_mipmaps);
-            if (z_stack > 1)
-                json_object_set_number(json_object(json_texture), "z_stack", z_stack);
-            json_object_set_value(json_object(json_texture), "flags", flags_to_json(flags));
+            if (nb_frames > 1)
+                json_object_set_number(json_object(json_texture), "nb_frames", nb_frames);
             uint32_t texture_format = default_texture_format;
             bool swizzled = false;
             switch (tex->type) {
@@ -1086,7 +1133,7 @@ int main_utf8(int argc, char** argv)
             }
             uint32_t expected_texture_size = 0;
             for (int j = 0; j < tex->mipmaps; j++)
-                expected_texture_size += z_stack * MIPMAP_SIZE(texture_format, j, width, height);
+                expected_texture_size += nb_frames * MIPMAP_SIZE(texture_format, j, width, height);
             uint32_t texture_size = ((i + 1 == hdr->nb_textures) ?
                 g1t_size - hdr->header_size : getv32(x_offset_table[i + 1])) - getv32(x_offset_table[i]);
             texture_size -= (uint32_t)sizeof(g1t_tex_header);
@@ -1108,23 +1155,24 @@ int main_utf8(int argc, char** argv)
                         texture_size - expected_texture_size, expected_texture_size);
                 } else if (texture_size / expected_texture_size == 6) {
                     // A cubemap is composed of one texture for each face
-                    cubemap = true;
+                    flags[2] |= G1T_FLAG_CUBE_MAP;
                 } else {
-                    fprintf(stderr, "ERROR: Stacked texture with factor of %d doesn't match our assertion\n",
+                    fprintf(stderr, "ERROR: Texture array with a factor of %d doesn't match our assertion\n",
                         texture_size / expected_texture_size);
                     fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                     break;
                 }
                 expected_texture_size = texture_size;
             }
+            json_object_set_value(json_object(json_texture), "flags", flags_to_json(flags));
 
             snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
             char dims[16] = { 0 }, props[8] = { 0 };
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
-            if (cubemap)
+            if (flags[2] & G1T_FLAG_TEXTURE_ARRAY)
+                strcat(props, "A");
+            if (flags[2] & G1T_FLAG_CUBE_MAP)
                 strcat(props, "C");
-            if (z_stack > 1)
-                strcat(props, "Z");
             if (props[0] == 0)
                 props[0] = '-';
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex->type,
@@ -1146,8 +1194,8 @@ int main_utf8(int argc, char** argv)
                 r = -1;
                 break;
             }
-            if (write_dds_header(dst, texture_format, width, height * z_stack,
-                                 tex->mipmaps, cubemap, flags[0]) != 1) {
+            if (write_dds_header(dst, texture_format, width, height,
+                                 tex->mipmaps, flags) != 1) {
                 fprintf(stderr, "ERROR: Can't write DDS header\n");
                 fclose(dst);
                 break;
@@ -1189,10 +1237,21 @@ int main_utf8(int argc, char** argv)
             }
             if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x09 || tex->type == 0x45)))
                 flip(dds_bpp(texture_format), &buf[pos], expected_texture_size, width);
-            if (fwrite(&buf[pos], expected_texture_size, 1, dst) != 1) {
-                fprintf(stderr, "ERROR: Can't write DDS data\n");
-                fclose(dst);
-                break;
+            // DDS expects the mipmaps of a texture array or cubemap to immediately follow
+            // the main one, but G1T instead stores all mains, then all L1 mipmaps, then
+            // all L2 mipmaps and so on... Thus we need to manually reorder the mipmaps.
+            if (flags[2] & G1T_FLAG_CUBE_MAP)
+                nb_frames *= 6;     // Adjust effective nb_frames for cubemaps
+            for (uint32_t f = 0; f < nb_frames; f++) {
+                for (uint32_t l = 0, offset = 0; l < tex->mipmaps; l++) {
+                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, l, width, height);
+                    offset += f * mipmap_size;
+                    if (fwrite(&buf[pos + offset], mipmap_size, 1, dst) != 1) {
+                        fprintf(stderr, "ERROR: Can't write DDS data\n");
+                        goto out;
+                    }
+                    offset += (nb_frames - f) * mipmap_size;
+                }
             }
             fclose(dst);
             json_array_append_value(json_array(json_textures_array), json_texture);
