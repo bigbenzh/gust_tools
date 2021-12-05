@@ -76,6 +76,8 @@ enum DDS_FORMAT {
     DDS_FORMAT_ARGB8,
     DDS_FORMAT_GRAB8,
     DDS_FORMAT_RGBA8,               // Should be the last uncompressed format with RGBA components
+    DDS_FORMAT_ARGB16,
+    DDS_FORMAT_ARGB32,
     DDS_FORMAT_RXGB8,
     DDS_FORMAT_BGR8,
     DDS_FORMAT_R8,
@@ -124,25 +126,6 @@ static __inline unsigned int dds_bwh(enum DDS_FORMAT f) {
 // DDS format: Bytes per pixel block
 static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
     switch (f) {
-    case DDS_FORMAT_BGR8:
-        return 3;
-    case DDS_FORMAT_ABGR8:
-    case DDS_FORMAT_ARGB8:
-    case DDS_FORMAT_GRAB8:
-    case DDS_FORMAT_RGBA8:
-    case DDS_FORMAT_RXGB8:
-        return 4;
-    case DDS_FORMAT_ABGR4:
-    case DDS_FORMAT_ARGB4:
-    case DDS_FORMAT_GRAB4:
-    case DDS_FORMAT_RGBA4:
-        return 2;
-    case DDS_FORMAT_R8:
-        return 1;
-    case DDS_FORMAT_DXT1:
-    case DDS_FORMAT_BC4:
-    case DDS_FORMAT_ATI1:
-        return 8;
     case DDS_FORMAT_DXT2:
     case DDS_FORMAT_DXT3:
     case DDS_FORMAT_DXT4:
@@ -153,7 +136,28 @@ static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
     case DDS_FORMAT_BC6H:
     case DDS_FORMAT_BC7:
     case DDS_FORMAT_ATI2:
+    case DDS_FORMAT_ARGB32:
         return 16;
+    case DDS_FORMAT_DXT1:
+    case DDS_FORMAT_BC4:
+    case DDS_FORMAT_ATI1:
+    case DDS_FORMAT_ARGB16:
+        return 8;
+    case DDS_FORMAT_ABGR8:
+    case DDS_FORMAT_ARGB8:
+    case DDS_FORMAT_GRAB8:
+    case DDS_FORMAT_RGBA8:
+    case DDS_FORMAT_RXGB8:
+        return 4;
+    case DDS_FORMAT_BGR8:
+        return 3;
+    case DDS_FORMAT_ABGR4:
+    case DDS_FORMAT_ARGB4:
+    case DDS_FORMAT_GRAB4:
+    case DDS_FORMAT_RGBA4:
+        return 2;
+    case DDS_FORMAT_R8:
+        return 1;
     default:
         // No idea, so assert and return 0
         assert(false);
@@ -164,14 +168,18 @@ static __inline unsigned int dds_bpb(enum DDS_FORMAT f) {
 // DDS format: Bits per individual pixel
 static __inline unsigned int dds_bpp(enum DDS_FORMAT f) {
     switch (f) {
-    case DDS_FORMAT_BGR8:
-        return 24;
+    case DDS_FORMAT_ARGB32:
+        return 128;
+    case DDS_FORMAT_ARGB16:
+        return 64;
     case DDS_FORMAT_ABGR8:
     case DDS_FORMAT_ARGB8:
     case DDS_FORMAT_GRAB8:
     case DDS_FORMAT_RGBA8:
     case DDS_FORMAT_RXGB8:
         return 32;
+    case DDS_FORMAT_BGR8:
+        return 24;
     case DDS_FORMAT_ABGR4:
     case DDS_FORMAT_ARGB4:
     case DDS_FORMAT_GRAB4:

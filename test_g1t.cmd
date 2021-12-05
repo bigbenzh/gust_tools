@@ -14,6 +14,7 @@ if %ERRORLEVEL% neq 0 goto err
 set list=^
   type_01_sw^
   type_01_win^
+  type_04_win^
   type_08_ps3^
   type_09_ps4^
   type_10_psv^
@@ -34,6 +35,7 @@ set list=^
   type_5e_win_2^
   type_5f_win^
   type_5f_win_2^
+  type_5f_win_3^
   type_60_ps4^
   type_62_ps4^
   type_62_ps4_2

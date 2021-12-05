@@ -37,8 +37,7 @@
 #define G1T_FLAG_SRGB           0x000000002000ULL // Set if the texture uses sRGB
 #define G1T_FLAG_NORMAL_MAP     0x030000000000ULL // Usually set for normal maps (but not always)
 #define G1T_FLAG_SURFACE_TEX    0x000000000001ULL // Set for textures that appear on a model's surface
-// The following are indicative flags, used only by this application
-#define G1T_FLAG_TEXTURE_ARRAY  0x0000FFFFFFFEULL
+#define G1T_FLAG_TEXTURE_ARRAY  0x0000F00F0000ULL
 #define G1T_FLAG_CUBE_MAP       0x000100000000ULL
 
 // Known platforms
@@ -83,6 +82,8 @@ typedef struct {
 
 // May be followed by a data[] section of 12, 16 or 20 bytes where the 32-bit
 // words at positions 12 and 16 are the actual texture width and height.
+// The 32-bit float at pos 4 is a depth, and the other words contain the
+// number of frames in a texture array as well as flags.
 
 #pragma pack(pop)
 
@@ -191,11 +192,13 @@ static void json_to_flags(uint64_t* flags, JSON_Array* json_flags_array)
 #define CHECK_MASK(flags, mask, array, string) \
   if ((flags & (mask)) == (mask)) { flags &= ~(mask); json_array_append_string(json_array(array), string); }
 
+#define GET_NB_FRAMES(val) ((((val) >> 28) & 0x0f) + (((val) >> 12) & 0xf0))
+
 static JSON_Value* flags_to_json(uint64_t* flags)
 {
     JSON_Value* json_flags_array = json_value_init_array();
     static char str[64] = { 0 };
-    uint64_t flags_copy[3] = { flags[0], flags[1], flags[2] };
+    uint64_t flags_copy[2] = { flags[0], flags[1] };
 
     // Named flags
     CHECK_MASK(flags_copy[0], G1T_FLAG_STANDARD_FLAGS, json_flags_array, "STANDARD_FLAGS");
@@ -205,9 +208,11 @@ static JSON_Value* flags_to_json(uint64_t* flags)
     CHECK_MASK(flags_copy[0], G1T_FLAG_SRGB, json_flags_array, "SRGB_COLORSPACE");
     CHECK_MASK(flags_copy[0], G1T_FLAG_EXTENDED_DATA, json_flags_array, "EXTENDED_DATA");
     CHECK_MASK(flags_copy[1], G1T_FLAG_SURFACE_TEX, json_flags_array, "SURFACE_TEXTURE");
-    if (flags_copy[2] & G1T_FLAG_TEXTURE_ARRAY)
+    if (flags_copy[1] & G1T_FLAG_TEXTURE_ARRAY) {
         json_array_append_string(json_array(json_flags_array), "TEXTURE_ARRAY");
-    CHECK_MASK(flags_copy[2], G1T_FLAG_CUBE_MAP, json_flags_array, "CUBE_MAP");
+        flags_copy[1] &= ~G1T_FLAG_TEXTURE_ARRAY;
+    }
+    CHECK_MASK(flags_copy[1], G1T_FLAG_CUBE_MAP, json_flags_array, "CUBE_MAP");
 
     // Unnamed flags
     for (int i = 0; i < 2; i++) {
@@ -231,7 +236,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
 
     DDS_HEADER header = { 0 };
     uint32_t bpp = dds_bpp(format);
-    bool use_dx10 = (format == DDS_FORMAT_BC7) || (flags[2] & G1T_FLAG_TEXTURE_ARRAY);
+    bool use_dx10 = (format == DDS_FORMAT_BC7) || (format == DDS_FORMAT_DX10) || (flags[1] & G1T_FLAG_TEXTURE_ARRAY);
     header.size = 124;
     header.flags = DDS_HEADER_FLAGS_TEXTURE | DDS_HEADER_FLAGS_LINEARSIZE;
     header.height = height;
@@ -298,6 +303,14 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.ddspf.flags = DDS_RGBA;
         header.ddspf.RGBBitCount = bpp;
         header.ddspf.RBitMask = (uint32_t)((1ULL << bpp) - 1);
+    } else if (format == DDS_FORMAT_ARGB32) {
+        header.ddspf.flags = DDS_FOURCC;
+        // 128bpp RGBA float
+        header.ddspf.fourCC = 0x74;
+    } else if (format == DDS_FORMAT_ARGB16) {
+        header.ddspf.flags = DDS_FOURCC;
+        // 64bpp RGBA half-float
+        header.ddspf.fourCC = 0x71; // Or it may be 0x24 if using R16G16B16A16
     } else {
         header.ddspf.flags = DDS_FOURCC;
         header.ddspf.fourCC = get_fourCC(use_dx10 ? DDS_FORMAT_DX10 : format);
@@ -308,7 +321,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.flags |= DDS_HEADER_FLAGS_MIPMAP;
         header.caps |= DDS_SURFACE_FLAGS_MIPMAP;
     }
-    if (flags[2] & G1T_FLAG_CUBE_MAP) {
+    if (flags[1] & G1T_FLAG_CUBE_MAP) {
         header.caps |= DDS_SURFACE_FLAGS_CUBEMAP;
         header.caps2 |= DDS_CUBEMAP_ALLFACES;
     }
@@ -320,8 +333,9 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
     if (use_dx10) {
         DDS_HEADER_DXT10 dxt10_hdr = { 0 };
         dxt10_hdr.resourceDimension = D3D10_RESOURCE_DIMENSION_TEXTURE2D;
-        assert((uint32_t)flags[2] != 0);
-        dxt10_hdr.arraySize = (uint32_t)flags[2];
+        dxt10_hdr.arraySize = GET_NB_FRAMES(flags[1]);
+        if (dxt10_hdr.arraySize == 0)
+            dxt10_hdr.arraySize = 1;
         dxt10_hdr.miscFlag = (flags[2] & G1T_FLAG_CUBE_MAP) ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
         switch (format) {
         case DDS_FORMAT_BC7:
@@ -335,6 +349,9 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
             break;
         case DDS_FORMAT_DXT5:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC3_UNORM_SRGB : DXGI_FORMAT_BC3_UNORM;
+            break;
+        case DDS_FORMAT_DX10:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
             break;
         case DDS_FORMAT_BC6H:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC6H_SF16 : DXGI_FORMAT_BC6H_UF16;
@@ -625,14 +642,15 @@ int main_utf8(int argc, char** argv)
             g1t_tex_header tex = { 0 };
             tex.type = json_object_get_uint8(texture_entry, "type");
             tex.z_mipmaps = json_object_get_uint8(texture_entry, "z_mipmaps");
+            const char* depth_str = json_object_get_string(texture_entry, "depth");
+            float depth = (depth_str == NULL) ? 0.0f : (float)atof(depth_str);
             uint64_t flags[2];
             json_to_flags(flags, json_object_get_array(texture_entry, "flags"));
             for (int j = 0; j < ARRAYSIZE(tex.flags); j++)
                 tex.flags[ARRAYSIZE(tex.flags) - j - 1] = (uint8_t)(flags[0] >> (8 * j));
             flag_table[i] = (uint32_t)(flags[0] >> 40);
             uint32_t nb_frames = json_object_get_uint32(texture_entry, "nb_frames");
-            assert(nb_frames < 0x10);
-            flags[1] |= ((uint64_t)nb_frames) << 28;
+            flags[1] |= ((uint64_t)nb_frames & 0x0f) << 28 | ((uint64_t)nb_frames & 0xf0) << 12;
             if (nb_frames == 0)
                 nb_frames = 1;
             // Read the DDS file
@@ -702,7 +720,7 @@ int main_utf8(int argc, char** argv)
             // Write data
             if (flags[0] & G1T_FLAG_EXTENDED_DATA) {
                 uint32_t data[5], data_size;
-                setbe32(&data[1], (uint32_t)(flags[1] >> 32));
+                data[1] = getv32(*((uint32_t*)&depth));
                 setbe32(&data[2], (uint32_t)flags[1]);
                 data[3] = dds_header->width;
                 data[4] = dds_header->height;
@@ -742,8 +760,8 @@ int main_utf8(int argc, char** argv)
             case 0x00: break;   // ???
             case 0x01: break;   // ???
             case 0x02: break;   // ???
-//            case 0x03: bpp = 64; break;
-//            case 0x04: bpp = 128; break;
+            case 0x03: texture_format = DDS_FORMAT_ARGB16; break;
+            case 0x04: texture_format = DDS_FORMAT_ARGB32; break;
             case 0x06: texture_format = DDS_FORMAT_DXT1; break; // PS2??, PS3
             case 0x07: texture_format = DDS_FORMAT_DXT3; break;
             case 0x08: texture_format = DDS_FORMAT_DXT5; break; // PS3
@@ -771,7 +789,7 @@ int main_utf8(int argc, char** argv)
 //            case 0x64: texture_format = DDS_FORMAT_BC5; swizzled = true; break;
 //            case 0x65: texture_format = DDS_FORMAT_BC6; swizzled = true; break;
 //            case 0x66: texture_format = DDS_FORMAT_BC7; swizzled = true; break;
-//            case 0x72: texture_format = DDS_FORMAT_????; break;   // Win
+            case 0x72: texture_format = DDS_FORMAT_BC7; break;   // Win
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type 0x%02x\n", tex.type);
                 goto out;
@@ -864,8 +882,12 @@ int main_utf8(int argc, char** argv)
             snprintf(dims, sizeof(dims), "%dx%d", dds_header->width, dds_header->height);
             if (nb_frames > 1)
                 strcat(props, "A");     // Array
+            if (data_endianness == big_endian)
+                strcat(props, "B");
             if (cubemap)
                 strcat(props, "C");     // Cubemap
+            if (depth != 0.0f)
+                strcat(props, "D");
             if (props[0] == 0)
                 props[0] = '-';
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex.type, getv32(hdr.header_size) + offset_table[i],
@@ -1030,6 +1052,7 @@ int main_utf8(int argc, char** argv)
         for (i = 0; i < hdr->nb_textures; i++) {
             uint32_t nb_frames = 0, pos = hdr->header_size + getv32(x_offset_table[i]);
             g1t_tex_header* tex = (g1t_tex_header*)&buf[pos];
+            float depth = 0.0f;
             if (data_endianness == big_endian) {
                 uint8_t swap_tmp = tex->dx;
                 tex->dx = tex->dy;
@@ -1048,9 +1071,9 @@ int main_utf8(int argc, char** argv)
             }
             // We're going to assume that the global flags (the ones after the G1T global header)
             // never see a value higher than 0x00ffffff, so that we can concatenate all the main
-            // texture flags together. We're also going to assume that the first 8 bytes in the
-            // extra data (after the extra data size) are additionnal flags in big-endian.
-            uint64_t flags[3] = { 0 };
+            // texture flags together. We're also going to assume that the 4 bytes in the extra
+            // data (after the extra data size and the depth) are additionnal flags in big-endian.
+            uint64_t flags[2] = { 0 };
             flags[0] = (uint64_t)getp32(&buf[(uint32_t)sizeof(g1t_header) + 4 * i]);
             if (flags[0] & 0xff000000ULL) {
                 fprintf(stderr, "ERROR: Global flags 0x%08x don't match our assertion\n", (uint32_t)flags[0]);
@@ -1070,14 +1093,13 @@ int main_utf8(int argc, char** argv)
             }
             // Extra flags, including the number of frames, may be provided
             if (data_size >= 0x0c) {
-                flags[1] = getbe64(&buf[pos + 4]);
-                nb_frames = (uint32_t)(flags[1] >> 28) & 0x0f;
-                flags[1] &= ~0xf0000000ULL;
+                uint32_t _depth = getp32(&buf[pos + 4]);
+                depth = *((float*)&_depth);
+                flags[1] = getbe32(&buf[pos + 8]);
+                nb_frames = GET_NB_FRAMES(flags[1]);
             }
             if (nb_frames == 0)
                 nb_frames = 1;
-            // Keep the number of frames in flags[2]
-            flags[2] |= nb_frames;
             // Non power-of-two width and height may be provided in the data
             if (data_size >= 0x10)
                 width = getp32(&buf[pos + 0x0c]);
@@ -1094,14 +1116,19 @@ int main_utf8(int argc, char** argv)
                 json_object_set_number(json_object(json_texture), "z_mipmaps", tex->z_mipmaps);
             if (nb_frames > 1)
                 json_object_set_number(json_object(json_texture), "nb_frames", nb_frames);
+            if (depth != 0.0f) {
+                char depth_str[16];
+                snprintf(depth_str, sizeof(depth_str), "%f", depth);
+                json_object_set_string(json_object(json_texture), "depth", depth_str);
+            }
             uint32_t texture_format = default_texture_format;
             bool swizzled = false;
             switch (tex->type) {
             case 0x00: break;
             case 0x01: break;
             case 0x02: break;
-//            case 0x03: bpp = 64; break;
-//            case 0x04: bpp = 128; break;
+            case 0x03: texture_format = DDS_FORMAT_ARGB16; break;
+            case 0x04: texture_format = DDS_FORMAT_ARGB32; break;
             case 0x06: texture_format = DDS_FORMAT_DXT1; break;
 //            case 0x07: texture_format = DDS_FORMAT_DXT3; break;
             case 0x08: texture_format = DDS_FORMAT_DXT5; break;
@@ -1125,7 +1152,8 @@ int main_utf8(int argc, char** argv)
 //            case 0x64: texture_format = DDS_FORMAT_BC5; swizzled = true; break;
 //            case 0x65: texture_format = DDS_FORMAT_BC6; swizzled = true; break;
 //            case 0x66: texture_format = DDS_FORMAT_BC7; swizzled = true; break;
-//            case 0x72: texture_format = DDS_FORMAT_????; break;
+            // 0x72 is not actually BC7, but that's the closest we get to semi-recognizable output
+            case 0x72: texture_format = DDS_FORMAT_BC7; break;
             default:
                 fprintf(stderr, "ERROR: Unsupported texture type (0x%02X)\n", tex->type);
                 fprintf(stderr, "Please visit: https://github.com/VitaSmith/gust_tools/issues/51\n");
@@ -1155,7 +1183,7 @@ int main_utf8(int argc, char** argv)
                         texture_size - expected_texture_size, expected_texture_size);
                 } else if (texture_size / expected_texture_size == 6) {
                     // A cubemap is composed of one texture for each face
-                    flags[2] |= G1T_FLAG_CUBE_MAP;
+                    flags[1] |= G1T_FLAG_CUBE_MAP;
                 } else {
                     fprintf(stderr, "ERROR: Texture array with a factor of %d doesn't match our assertion\n",
                         texture_size / expected_texture_size);
@@ -1169,10 +1197,14 @@ int main_utf8(int argc, char** argv)
             snprintf(path, sizeof(path), "%s%s%c%03d.dds", dir, _basename(argv[argc - 1]), PATH_SEP, i);
             char dims[16] = { 0 }, props[8] = { 0 };
             snprintf(dims, sizeof(dims), "%dx%d", width, height);
-            if (flags[2] & G1T_FLAG_TEXTURE_ARRAY)
+            if (flags[1] & G1T_FLAG_TEXTURE_ARRAY)
                 strcat(props, "A");
-            if (flags[2] & G1T_FLAG_CUBE_MAP)
+            if (data_endianness == big_endian)
+                strcat(props, "B");
+            if (flags[1] & G1T_FLAG_CUBE_MAP)
                 strcat(props, "C");
+            if (depth != 0)
+                strcat(props, "D");
             if (props[0] == 0)
                 props[0] = '-';
             printf("0x%02x 0x%08x 0x%08x %s %-10s %-7d %s\n", tex->type,
@@ -1240,7 +1272,7 @@ int main_utf8(int argc, char** argv)
             // DDS expects the mipmaps of a texture array or cubemap to immediately follow
             // the main one, but G1T instead stores all mains, then all L1 mipmaps, then
             // all L2 mipmaps and so on... Thus we need to manually reorder the mipmaps.
-            if (flags[2] & G1T_FLAG_CUBE_MAP)
+            if (flags[1] & G1T_FLAG_CUBE_MAP)
                 nb_frames *= 6;     // Adjust effective nb_frames for cubemaps
             for (uint32_t f = 0; f < nb_frames; f++) {
                 for (uint32_t l = 0, offset = 0; l < tex->mipmaps; l++) {
