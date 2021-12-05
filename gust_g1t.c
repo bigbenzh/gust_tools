@@ -336,7 +336,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         dxt10_hdr.arraySize = GET_NB_FRAMES(flags[1]);
         if (dxt10_hdr.arraySize == 0)
             dxt10_hdr.arraySize = 1;
-        dxt10_hdr.miscFlag = (flags[2] & G1T_FLAG_CUBE_MAP) ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
+        dxt10_hdr.miscFlag = (flags[1] & G1T_FLAG_CUBE_MAP) ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
         switch (format) {
         case DDS_FORMAT_BC7:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
@@ -585,8 +585,8 @@ int main_utf8(int argc, char** argv)
         if (hdr.platform == SONY_PS3 || hdr.platform == NINTENDO_WII || hdr.platform == NINTENDO_WIIU)
             data_endianness = big_endian;
         hdr.magic = G1TG_MAGIC;
-        char version_string[5] = { 0 };
-        snprintf(version_string, 5, "%04d", version);
+        char version_string[6] = { 0 };
+        snprintf(version_string, sizeof(version_string), "%04d", version);
         hdr.version = getbe32(version_string);
         hdr.total_size = 0;  // To be rewritten when we're done
         hdr.nb_textures = (uint32_t)json_array_get_count(json_textures_array);
@@ -646,8 +646,8 @@ int main_utf8(int argc, char** argv)
             float depth = (depth_str == NULL) ? 0.0f : (float)atof(depth_str);
             uint64_t flags[2];
             json_to_flags(flags, json_object_get_array(texture_entry, "flags"));
-            for (int j = 0; j < ARRAYSIZE(tex.flags); j++)
-                tex.flags[ARRAYSIZE(tex.flags) - j - 1] = (uint8_t)(flags[0] >> (8 * j));
+            for (size_t j = 0; j < array_size(tex.flags); j++)
+                tex.flags[array_size(tex.flags) - j - 1] = (uint8_t)(flags[0] >> (8 * j));
             flag_table[i] = (uint32_t)(flags[0] >> 40);
             uint32_t nb_frames = json_object_get_uint32(texture_entry, "nb_frames");
             flags[1] |= ((uint64_t)nb_frames & 0x0f) << 28 | ((uint64_t)nb_frames & 0xf0) << 12;
@@ -703,7 +703,7 @@ int main_utf8(int argc, char** argv)
                 tex.z_mipmaps = tex.mipmaps;
                 tex.mipmaps = swap_tmp;
             } else {
-                for (int j = 0; j < ARRAYSIZE(tex.flags); j++)
+                for (size_t j = 0; j < array_size(tex.flags); j++)
                     tex.flags[j] = tex.flags[j] >> 4 | tex.flags[j] << 4;
             }
             // Write texture header
@@ -1061,7 +1061,7 @@ int main_utf8(int argc, char** argv)
                 tex->z_mipmaps = tex->mipmaps;
                 tex->mipmaps = swap_tmp;
             } else {
-                for (int j = 0; j < ARRAYSIZE(tex->flags); j++)
+                for (size_t j = 0; j < array_size(tex->flags); j++)
                     tex->flags[j] = tex->flags[j] >> 4 | tex->flags[j] << 4;
             }
             if (tex->mipmaps == 0) {
@@ -1080,7 +1080,7 @@ int main_utf8(int argc, char** argv)
                 fprintf(stderr, "Please report this error to %s.\n", REPORT_URL);
                 break;
             }
-            for (int j = 0; j < ARRAYSIZE(tex->flags); j++)
+            for (size_t j = 0; j < array_size(tex->flags); j++)
                 flags[0] = flags[0] << 8 | (uint64_t)tex->flags[j];
             pos += sizeof(g1t_tex_header);
             uint32_t width = 1 << tex->dx;

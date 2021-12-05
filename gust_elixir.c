@@ -81,7 +81,7 @@ int32_t decompress_mem_to_mem(void* pOut_buf, size_t out_buf_len, const void* pS
 int main_utf8(int argc, char** argv)
 {
     int r = -1;
-    char path[256], *filename = NULL;
+    char path[256];
     uint8_t *buf = NULL, *zbuf = NULL;
     uint32_t zsize, lxr_entry_size = sizeof(lxr_entry);
     FILE *file = NULL, *dst = NULL;
