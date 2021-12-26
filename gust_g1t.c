@@ -38,6 +38,7 @@
 #define G1T_FLAG_NORMAL_MAP     0x030000000000ULL // Usually set for normal maps (but not always)
 #define G1T_FLAG_SURFACE_TEX    0x000000000001ULL // Set for textures that appear on a model's surface
 #define G1T_FLAG_TEXTURE_ARRAY  0x0000F00F0000ULL
+// This one is not used in G1Ts, but only in this application
 #define G1T_FLAG_CUBE_MAP       0x000100000000ULL
 
 // Known platforms
@@ -236,7 +237,8 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
 
     DDS_HEADER header = { 0 };
     uint32_t bpp = dds_bpp(format);
-    bool use_dx10 = (format == DDS_FORMAT_BC7) || (format == DDS_FORMAT_DX10) || (flags[1] & G1T_FLAG_TEXTURE_ARRAY);
+    bool use_dx10 = (format == DDS_FORMAT_BC7) || (format == DDS_FORMAT_DX10) ||
+        (flags[0] & G1T_FLAG_SRGB) || (flags[1] & G1T_FLAG_TEXTURE_ARRAY);
     header.size = 124;
     header.flags = DDS_HEADER_FLAGS_TEXTURE | DDS_HEADER_FLAGS_LINEARSIZE;
     header.height = height;
@@ -262,7 +264,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         }
     } else if (format >= DDS_FORMAT_ABGR4 && format <= DDS_FORMAT_RGBA8) {
         if (use_dx10) {
-            header.ddspf.flags = DDS_FOURCC | DDS_ALPHAPIXELS;
+            header.ddspf.flags = DDS_FOURCC;
             header.ddspf.fourCC = get_fourCC(DDS_FORMAT_DX10);
         } else {
             header.ddspf.flags = DDS_RGBA;
@@ -307,10 +309,12 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         header.ddspf.flags = DDS_FOURCC;
         // 128bpp RGBA float
         header.ddspf.fourCC = 0x74;
+        use_dx10 = false;
     } else if (format == DDS_FORMAT_ARGB16) {
         header.ddspf.flags = DDS_FOURCC;
         // 64bpp RGBA half-float
         header.ddspf.fourCC = 0x71; // Or it may be 0x24 if using R16G16B16A16
+        use_dx10 = false;
     } else {
         header.ddspf.flags = DDS_FOURCC;
         header.ddspf.fourCC = get_fourCC(use_dx10 ? DDS_FORMAT_DX10 : format);
@@ -338,9 +342,6 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
             dxt10_hdr.arraySize = 1;
         dxt10_hdr.miscFlag = (flags[1] & G1T_FLAG_CUBE_MAP) ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0;
         switch (format) {
-        case DDS_FORMAT_BC7:
-            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
-            break;
         case DDS_FORMAT_DXT1:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC1_UNORM_SRGB : DXGI_FORMAT_BC1_UNORM;
             break;
@@ -350,6 +351,10 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
         case DDS_FORMAT_DXT5:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC3_UNORM_SRGB : DXGI_FORMAT_BC3_UNORM;
             break;
+        case DDS_FORMAT_BC4:
+            dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC4_SNORM : DXGI_FORMAT_BC4_UNORM;
+            break;
+        case DDS_FORMAT_BC7:
         case DDS_FORMAT_DX10:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
             break;
@@ -357,6 +362,7 @@ static size_t write_dds_header(FILE* fd, enum DDS_FORMAT format, uint32_t width,
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_BC6H_SF16 : DXGI_FORMAT_BC6H_UF16;
             break;
         case DDS_FORMAT_RGBA8:
+        case DDS_FORMAT_ARGB8:
             dxt10_hdr.dxgiFormat = (flags[0] & G1T_FLAG_SRGB) ? DXGI_FORMAT_B8G8R8A8_UNORM_SRGB : DXGI_FORMAT_B8G8R8A8_UNORM;
             break;
         default:
@@ -384,7 +390,7 @@ static void rgba_convert(const enum DDS_FORMAT format, const char* in,
     for (uint32_t i = 0; i < 4; i++) {
         uint32_t pos_in = 3 - (uint32_t)((uintptr_t)strchr(in, rgba[i]) - (uintptr_t)in);
         uint32_t pos_out = 3 - (uint32_t)((uintptr_t)strchr(out, rgba[i]) - (uintptr_t)out);
-        mask[i] = ((1 << bits_per_pixel / 4) - 1) << (pos_in * 8);
+        mask[i] = ((1 << (bits_per_pixel / 4)) - 1) << (pos_in * 8);
         rot[i] = (pos_out - pos_in) * 8;
     }
 
@@ -488,6 +494,66 @@ static void mortonize(const enum DDS_FORMAT format, const int16_t morton_order,
         assert(j < num_elements);
         memcpy(&tmp_buf[j * bytes_per_element], &buf[i * bytes_per_element], bytes_per_element);
     }
+    memcpy(buf, tmp_buf, size);
+    free(tmp_buf);
+}
+
+static void tile(const enum DDS_FORMAT format, uint32_t tile_size, uint32_t width,
+                 uint8_t* buf, const uint32_t size)
+{
+    const uint32_t bytes_per_element = dds_bpb(format);
+    assert(tile_size % dds_bwh(format) == 0);
+    assert(width % dds_bwh(format) == 0);
+    tile_size /= dds_bwh(format);
+    width /= dds_bwh(format);
+    assert(bytes_per_element != 0);
+    assert(size % bytes_per_element == 0);
+    assert(size % (tile_size * tile_size) == 0);
+    assert(width % tile_size == 0);
+
+    uint8_t* tmp_buf = (uint8_t*)malloc(size);
+
+    for (uint32_t i = 0; i < size / bytes_per_element / tile_size / tile_size; i++) {
+        uint32_t tile_row = i / (width / tile_size);
+        uint32_t tile_column = i % (width / tile_size);
+        uint32_t tile_start = tile_row * width * tile_size + tile_column * tile_size;
+        for (uint32_t j = 0; j < tile_size; j++) {
+            memcpy(&tmp_buf[bytes_per_element * (i * tile_size * tile_size + j * tile_size)],
+                &buf[bytes_per_element * (tile_start + j * width)],
+                (size_t)tile_size * bytes_per_element);
+        }
+    }
+
+    memcpy(buf, tmp_buf, size);
+    free(tmp_buf);
+}
+
+static void untile(const enum DDS_FORMAT format, uint32_t tile_size, uint32_t width,
+                   uint8_t* buf, const uint32_t size)
+{
+    const uint32_t bytes_per_element = dds_bpb(format);
+    assert(tile_size % dds_bwh(format) == 0);
+    assert(width % dds_bwh(format) == 0);
+    tile_size /= dds_bwh(format);
+    width /= dds_bwh(format);
+    assert(bytes_per_element != 0);
+    assert(size % bytes_per_element == 0);
+    assert(size % (tile_size * tile_size) == 0);
+    assert(width % tile_size == 0);
+
+    uint8_t* tmp_buf = (uint8_t*)malloc(size);
+
+    for (uint32_t i = 0; i < size / bytes_per_element / tile_size / tile_size; i++) {
+        uint32_t tile_row = i / (width / tile_size);
+        uint32_t tile_column = i % (width / tile_size);
+        uint32_t tile_start = tile_row * width * tile_size + tile_column * tile_size;
+        for (uint32_t j = 0; j < tile_size; j++) {
+            memcpy(&tmp_buf[bytes_per_element * (tile_start + j * width)],
+                &buf[bytes_per_element * (i * tile_size * tile_size + j * tile_size)],
+                (size_t)tile_size * bytes_per_element);
+        }
+    }
+
     memcpy(buf, tmp_buf, size);
     free(tmp_buf);
 }
@@ -619,7 +685,7 @@ int main_utf8(int argc, char** argv)
 
         // Deal with the global extra data array
         for (size_t i = 0; i < json_array_get_count(json_extra_data_array); i++) {
-            uint16_t extra_data = json_array_get_uint16(json_extra_data_array, i);
+            uint16_t extra_data = getv16(json_array_get_uint16(json_extra_data_array, i));
             if (fwrite(&extra_data, 1, sizeof(uint16_t), file) != sizeof(uint16_t)) {
                 fprintf(stderr, "ERROR: Can't write global extra data\n");
                 goto out;
@@ -722,16 +788,15 @@ int main_utf8(int argc, char** argv)
                 uint32_t data[5], data_size;
                 data[1] = getv32(*((uint32_t*)&depth));
                 setbe32(&data[2], (uint32_t)flags[1]);
-                data[3] = dds_header->width;
-                data[4] = dds_header->height;
-                if (!is_power_of_2(dds_header->width))
+                data[3] = getv32(dds_header->width);
+                data[4] = getv32(dds_header->height);
+                if (!is_power_of_2(dds_header->height))
                     data_size = 5;
                 else if (!is_power_of_2(dds_header->width))
                     data_size = 4;
                 else
                     data_size = 3;
-                data[0] = data_size * sizeof(uint32_t);
-                fix_endian32(data, data_size);
+                data[0] = getv32(data_size * sizeof(uint32_t));
                 if (fwrite(data, sizeof(uint32_t), data_size, file) != data_size) {
                     fprintf(stderr, "ERROR: Can't write extended data\n");
                     goto out;
@@ -740,7 +805,7 @@ int main_utf8(int argc, char** argv)
 
             // Set the default ARGB format for the platform
             uint32_t default_texture_format;
-            switch (getv32(hdr.platform)) {
+            switch (hdr.platform) {
             case NINTENDO_DS:
             case NINTENDO_3DS:
             case SONY_PS4:
@@ -796,6 +861,9 @@ int main_utf8(int argc, char** argv)
             }
 
             uint32_t expected_texture_size = 0;
+            uint32_t min_mipmap_size = dds_bpb(texture_format);
+            if (hdr.platform == NINTENDO_WIIU)
+                min_mipmap_size = 0x40 * dds_bpb(texture_format);
             for (int j = 0; j < tex.mipmaps; j++)
                 expected_texture_size += MIPMAP_SIZE(texture_format, j, dds_header->width, dds_header->height);
             expected_texture_size *= nb_frames;
@@ -844,21 +912,24 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
 
-            if (flip_image || ((getv32(hdr.platform) == NINTENDO_3DS) && (tex.type == 0x09 || tex.type == 0x45)))
+            if (flip_image || ((hdr.platform == NINTENDO_3DS) && (tex.type == 0x09 || tex.type == 0x45)))
                 flip(dds_bpp(texture_format), dds_payload, texture_size, dds_header->width);
 
             if (swizzled) {
                 int16_t mo = 0;     // Morton order
                 uint32_t wf = 1;    // Width factor
-                switch (getv32(hdr.platform)) {
+                uint32_t awf = 1;   // Additional width factor
+                switch (hdr.platform) {
                 case SONY_PS4:
                 case NINTENDO_3DS:
                     mo = 3;
                     wf = 2;
                     break;
                 case NINTENDO_WIIU:
-                    wf = 2;
-                    // Fall through
+                    mo = 1;        // Same for all mipmaps
+                    wf = 16 / dds_bpb(texture_format);
+                    awf = 8;
+                    break;
                 default:
                     mo = (int16_t)log2(min(dds_header->width / dds_bwh(texture_format) / wf,
                             dds_header->height / dds_bwh(texture_format)));
@@ -867,12 +938,22 @@ int main_utf8(int argc, char** argv)
                 uint32_t offset = 0;
                 assert(mo != 0);
                 // TODO: We'll need to handle morton for texture arrays & cubemaps
-                for (int j = 1; j <= tex.mipmaps && mo != 0; j++) {
-                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, dds_header->width, dds_header->height);
-                    mortonize(texture_format, mo, dds_header->width / (1 << (j - 1)), dds_header->height / (1 << (j - 1)),
-                        &dds_payload[offset], mipmap_size, wf);
+                for (int j = 0; j < tex.mipmaps && mo != 0; j++) {
+                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j, dds_header->width, dds_header->height);
+                    uint32_t mw = max(awf * dds_bwh(texture_format), dds_header->width / (1 << j));
+                    uint32_t mh = max(awf * dds_bwh(texture_format), dds_header->height / (1 << j));
+                    uint8_t* mipmap_buf = calloc(max(mipmap_size, min_mipmap_size), 1);
+                    if (mipmap_buf == NULL)
+                        goto out;
+                    memcpy(mipmap_buf, &dds_payload[offset], mipmap_size);
+                    if (dds_header->width / (1 << j) < mw)
+                        untile(texture_format, dds_header->width / (1 << j), mw, mipmap_buf, max(min_mipmap_size, mipmap_size));
+                    mortonize(texture_format, mo, mw, mh, mipmap_buf, max(mipmap_size, min_mipmap_size), wf);
+                    memcpy(&dds_payload[offset], mipmap_buf, mipmap_size);
+                    free(mipmap_buf);
                     offset += mipmap_size;
-                    mo += (mo > 0) ? -1 : +1;
+                    if (hdr.platform != NINTENDO_WIIU)
+                        mo += (mo > 0) ? -1 : +1;
                 }
             }
             if (texture_format >= DDS_FORMAT_ABGR4 && texture_format <= DDS_FORMAT_RGBA8)
@@ -904,6 +985,16 @@ int main_utf8(int argc, char** argv)
                     if (fwrite(&dds_payload[f * f_size + offset], mipmap_size, 1, file) != 1) {
                         fprintf(stderr, "ERROR: Can't write DDS data\n");
                         goto out;
+                    }
+                    if (mipmap_size < min_mipmap_size) {
+                        uint8_t* completion_buf = calloc(min_mipmap_size - mipmap_size, 1);
+                        if (completion_buf == NULL)
+                            goto out;
+                        if (fwrite(completion_buf, min_mipmap_size - mipmap_size, 1, file) != 1) {
+                            fprintf(stderr, "ERROR: Can't write DDS data\n");
+                            goto out;
+                        }
+                        free(completion_buf);
                     }
                 }
                 offset += mipmap_size;
@@ -975,7 +1066,7 @@ int main_utf8(int argc, char** argv)
             fprintf(stderr, "ERROR: File size mismatch\n");
             goto out;
         }
-        char version_string[5];
+        char version_string[5] = { 0 };
         setbe32(version_string, hdr->version);
         version_string[4] = 0;
         if (hdr->version >> 16 != 0x3030 && hdr->version >> 16 != 0x3031)
@@ -1160,8 +1251,11 @@ int main_utf8(int argc, char** argv)
                 goto out;
             }
             uint32_t expected_texture_size = 0;
+            uint32_t min_mipmap_size = dds_bpb(texture_format);
+            if (hdr->platform == NINTENDO_WIIU)
+                min_mipmap_size = 0x40 * dds_bpb(texture_format);
             for (int j = 0; j < tex->mipmaps; j++)
-                expected_texture_size += nb_frames * MIPMAP_SIZE(texture_format, j, width, height);
+                expected_texture_size += nb_frames * max(MIPMAP_SIZE(texture_format, j, width, height), min_mipmap_size);
             uint32_t texture_size = ((i + 1 == hdr->nb_textures) ?
                 g1t_size - hdr->header_size : getv32(x_offset_table[i + 1])) - getv32(x_offset_table[i]);
             texture_size -= (uint32_t)sizeof(g1t_tex_header);
@@ -1179,8 +1273,8 @@ int main_utf8(int argc, char** argv)
                 break;
             } else if (texture_size > expected_texture_size) {
                 if (texture_size % expected_texture_size != 0) {
-                    fprintf(stderr, "WARNING: Actual texture size is 0x%x bytes larger than expected size 0x%x\n",
-                        texture_size - expected_texture_size, expected_texture_size);
+                    fprintf(stderr, "WARNING: Actual texture size is larger than expected size by 0x%x\n",
+                        texture_size - expected_texture_size);
                 } else if (texture_size / expected_texture_size == 6) {
                     // A cubemap is composed of one texture for each face
                     flags[1] |= G1T_FLAG_CUBE_MAP;
@@ -1242,6 +1336,7 @@ int main_utf8(int argc, char** argv)
             if (swizzled) {
                 int16_t mo = 0;     // Morton order
                 uint32_t wf = 1;    // Width factor
+                uint32_t awf = 1;   // Additional width factor
                 switch (hdr->platform) {
                 case SONY_PS4:
                 case NINTENDO_3DS:
@@ -1249,22 +1344,27 @@ int main_utf8(int argc, char** argv)
                     wf = 2;
                     break;
                 case NINTENDO_WIIU:
-                    wf = 2;
+                    mo = -1;        // Same for all mipmaps
+                    wf = 16 / dds_bpb(texture_format);
+                    awf = 8;
                     break;
-                    // Fall through
                 default:
                     mo = -1 * (int16_t)log2(min(width / dds_bwh(texture_format) / wf,
                         height / dds_bwh(texture_format)));
                     break;
                 }
                 uint32_t offset = 0;
-//                assert(mo != 0);
-                for (int j = 1; j <= tex->mipmaps && mo != 0; j++) {
-                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, j - 1, width, height);
-                    mortonize(texture_format, mo, width / (1 << (j - 1)), height / (1 << (j - 1)),
-                        &buf[pos + offset], mipmap_size, wf);
+                assert(mo != 0);
+                for (int j = 0; j < tex->mipmaps && mo != 0; j++) {
+                    uint32_t mipmap_size = max(MIPMAP_SIZE(texture_format, j, width, height), min_mipmap_size);
+                    uint32_t mw = max(awf * dds_bwh(texture_format), width / (1 << j));
+                    uint32_t mh = max(awf * dds_bwh(texture_format), height / (1 << j));
+                    mortonize(texture_format, mo, mw, mh, &buf[pos + offset], mipmap_size, wf);
+                    if (width / (1 << j) < mw)
+                        tile(texture_format, width / (1 << j), mw, &buf[pos + offset], mipmap_size);
                     offset += mipmap_size;
-                    mo += (mo > 0) ? -1 : +1;
+                    if (hdr->platform != NINTENDO_WIIU)
+                        mo += (mo > 0) ? -1 : +1;
                 }
             }
             if (flip_image || ((hdr->platform == NINTENDO_3DS) && (tex->type == 0x09 || tex->type == 0x45)))
@@ -1276,9 +1376,9 @@ int main_utf8(int argc, char** argv)
                 nb_frames *= 6;     // Adjust effective nb_frames for cubemaps
             for (uint32_t f = 0; f < nb_frames; f++) {
                 for (uint32_t l = 0, offset = 0; l < tex->mipmaps; l++) {
-                    uint32_t mipmap_size = MIPMAP_SIZE(texture_format, l, width, height);
+                    uint32_t mipmap_size = max(MIPMAP_SIZE(texture_format, l, width, height), min_mipmap_size);
                     offset += f * mipmap_size;
-                    if (fwrite(&buf[pos + offset], mipmap_size, 1, dst) != 1) {
+                    if (fwrite(&buf[pos + offset], MIPMAP_SIZE(texture_format, l, width, height), 1, dst) != 1) {
                         fprintf(stderr, "ERROR: Can't write DDS data\n");
                         goto out;
                     }

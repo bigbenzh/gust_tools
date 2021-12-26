@@ -422,7 +422,7 @@ typedef struct
 #define MAKEFOURCC(cc0, cc1, cc2, cc3)  ((uint32_t)(cc0) | ((uint32_t)(cc1) << 8) | ((uint32_t)(cc2) << 16) | ((uint32_t)(cc3) << 24))
 #endif
 
-static __inline uint32_t get_fourCC(int format)
+static __inline uint32_t get_fourCC(enum DDS_FORMAT format)
 {
     switch (format) {
     case DDS_FORMAT_DXT1:

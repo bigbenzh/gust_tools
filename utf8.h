@@ -46,7 +46,7 @@ static __inline char* utf16_to_utf8(const wchar_t* str16)
     if (str16[0] == 0)
         return calloc(1, 1);
 
-    if (((str8_size = str8_size = WideCharToMultiByte(CP_UTF8, 0, str16, -1, NULL, 0, NULL, NULL)) <= 1) ||
+    if (((str8_size = WideCharToMultiByte(CP_UTF8, 0, str16, -1, NULL, 0, NULL, NULL)) <= 1) ||
         ((str8 = (char*)calloc(str8_size, 1)) == NULL))
         return NULL;
 
