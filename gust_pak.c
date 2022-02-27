@@ -70,8 +70,19 @@ typedef struct {
 #define MAX_PAK_ENTRY_SIZE  sizeof(pak_entry64_a22)
 #define CURRENT_ENTRY_SIZE  (is_pak64 ? (is_a22 ? sizeof(pak_entry64_a22) : sizeof(pak_entry64)) : sizeof(pak_entry32))
 
+// Game master key
+const char* mk = "";
+
 static __inline void decode(uint8_t* a, uint8_t* k, uint32_t size, uint32_t key_size)
 {
+    // We may call decode() multiple times so make sure we preserve the original key
+    uint8_t _k[MAX_KEY_SIZE];
+    if (mk[0] != 0) {
+        // XOR with the master key
+        for (uint32_t i = 0; i < key_size; i++)
+            _k[i] = k[i] ^ mk[i];
+        k = _k;
+    }
     for (uint32_t i = 0; i < size; i++)
         a[i] ^= k[i % key_size];
 }
