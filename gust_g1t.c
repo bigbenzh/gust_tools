@@ -1,6 +1,6 @@
 /*
   gust_g1t - DDS texture unpacker for Gust (Koei/Tecmo) .g1t files
-  Copyright © 2019-2021 VitaSmith
+  Copyright © 2019-2022 VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -588,7 +588,7 @@ int main_utf8(int argc, char** argv)
     bool no_prompt = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'y');
 
     if ((argc != 2) && !list_only && !flip_image && !no_prompt) {
-        printf("%s %s (c) 2019-2021 VitaSmith\n\n"
+        printf("%s %s (c) 2019-2022 VitaSmith\n\n"
             "Usage: %s [-l] [-f] [-y] <file or directory>\n\n"
             "Extracts (file) or recreates (directory) a Gust .g1t texture archive.\n\n"
             "Note: A backup (.bak) of the original is automatically created, when the target\n"
@@ -790,10 +790,8 @@ int main_utf8(int argc, char** argv)
                 setbe32(&data[2], (uint32_t)flags[1]);
                 data[3] = getv32(dds_header->width);
                 data[4] = getv32(dds_header->height);
-                if (!is_power_of_2(dds_header->height))
+                if (!is_power_of_2(dds_header->width) || !is_power_of_2(dds_header->height))
                     data_size = 5;
-                else if (!is_power_of_2(dds_header->width))
-                    data_size = 4;
                 else
                     data_size = 3;
                 data[0] = getv32(data_size * sizeof(uint32_t));

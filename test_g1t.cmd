@@ -36,6 +36,7 @@ set list=^
   type_5f_win^
   type_5f_win_2^
   type_5f_win_3^
+  type_5f_win_4^
   type_60_ps4^
   type_62_ps4^
   type_62_ps4_2
