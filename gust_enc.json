@@ -123,7 +123,7 @@
             ],
             "fence": 0x0ab5
         },
-        {   // Atelier Ryza (A21), Atelier Ryza 2 (A22) and Blue Reflection: Second Light
+        {   // Atelier Ryza (A21), Atelier Ryza 2 (A22), Blue Reflection 2 and Atelier Sophie 2 (A23)
             "id": "A21",
             "name": "Atelier Ryza",
             "version": 2,

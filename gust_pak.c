@@ -1,6 +1,6 @@
 /*
   gust_pak - PAK archive unpacker for Gust (Koei/Tecmo) PC games
-  Copyright © 2019-2021 VitaSmith
+  Copyright © 2019-2022 VitaSmith
   Copyright © 2018 Yuri Hime (shizukachan)
 
   This program is free software: you can redistribute it and/or modify
@@ -70,8 +70,23 @@ typedef struct {
 #define MAX_PAK_ENTRY_SIZE  sizeof(pak_entry64_a22)
 #define CURRENT_ENTRY_SIZE  (is_pak64 ? (is_a22 ? sizeof(pak_entry64_a22) : sizeof(pak_entry64)) : sizeof(pak_entry32))
 
-// Game master key
-const char* mk = "";
+//
+// Per-game master keys that are used to decrypt data for A23 and later games.
+//
+// Note that the key below was derived directly from the PAK data rather than
+// extracted from the game executable, where it also resides (and we will be
+// happy to submit *FORMAL PROOF* of this, if legally challenged).
+// As a result, because it was derived directly from the encrypted data, we
+// did not have to circumvent any means of copy protection or breach the
+// license agreement and therefore consider that there exist no legal barrier
+// to publishing it in this source, per "clean room design" rules.
+//
+static char* master_key[] = {
+    "",                                     // No master key
+    "dGGKXLHLuCJwv8aBc3YQX6X6sREVPchs",     // A23 master key
+};
+static char* master_key_name[] = { "", "A23" };
+const char* mk;
 
 static __inline void decode(uint8_t* a, uint8_t* k, uint32_t size, uint32_t key_size)
 {
@@ -109,6 +124,18 @@ static uint8_t* string_to_key(const char* str, uint32_t key_size)
     return key;
 }
 
+uint32_t alphanum_score(const char* str, size_t len)
+{
+    uint32_t score = 0;
+    for (uint32_t i = 0; i < len; i++) {
+        char c = str[i];
+        if (c == 0 || c == '.' ||  (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || c == '\\' || (c >= 'a' && c <= 'z'))
+            continue;
+        score += (c > 0x7E) ? 0x1000 : 0x10;
+    }
+    return score;
+}
+
 // To handle either 32 or 64 bit PAK entries
 #define entries32     ((pak_entry32*)entries)
 #define entries64     ((pak_entry64*)entries)
@@ -121,7 +148,7 @@ int main_utf8(int argc, char** argv)
 {
     int r = -1;
     FILE* file = NULL;
-    uint8_t* buf = NULL;
+    uint8_t zero_key[MAX_KEY_SIZE] = { 0 }, *buf = NULL;
     char path[PATH_MAX];
     pak_header hdr = { 0 };
     void* entries = NULL;
@@ -130,7 +157,7 @@ int main_utf8(int argc, char** argv)
     bool list_only = (argc == 3) && (argv[1][0] == '-') && (argv[1][1] == 'l');
 
     if ((argc != 2) && !list_only) {
-        printf("%s %s (c) 2018-2021 Yuri Hime & VitaSmith\n\n"
+        printf("%s %s (c) 2018-2022 Yuri Hime & VitaSmith\n\n"
             "Usage: %s [-l] <Gust PAK file>\n\n"
             "Extracts (.pak) or recreates (.json) a Gust .pak archive.\n\n",
             _appname(argv[0]), GUST_TOOLS_VERSION_STR, _appname(argv[0]));
@@ -159,6 +186,9 @@ int main_utf8(int argc, char** argv)
         hdr.version = json_object_get_uint32(json_object(json), "version");
         hdr.flags = json_object_get_uint32(json_object(json), "flags");
         hdr.nb_files = json_object_get_uint32(json_object(json), "nb_files");
+        mk = json_object_get_string(json_object(json), "master_key");
+        if (mk == NULL)
+            mk = master_key[0];
         is_pak64 = json_object_get_boolean(json_object(json), "64-bit");
         is_a22 = json_object_get_boolean(json_object(json), "a22-extensions");
         if (is_a22 && !is_pak64) {
@@ -289,7 +319,42 @@ int main_utf8(int argc, char** argv)
         }
         is_pak64 = min(sum[0], min(sum[1], sum[2])) == min(sum[1], sum[2]);
         is_a22 = is_pak64 && (min(sum[1], sum[2]) == sum[2]);
-        printf("Detected %s PAK format\n\n", is_pak64 ? (is_a22 ? "A22/64-bit" : "A18/64-bit") : "A17/32-bit");
+        printf("Detected %s PAK format\n", is_pak64 ? (is_a22 ? "A22/64-bit" : "A18/64-bit") : "A17/32-bit");
+
+        // Determine the master key that needs to be applied, if any
+        char filename[FILENAME_SIZE];
+        uint32_t weight[array_size(master_key)], best_score, best_weight, best_k;
+        memset(weight, 0, array_size(master_key) * sizeof(uint32_t));
+        for (uint32_t i = 0; i < hdr.nb_files; i++) {
+            bool skip_decode = (memcmp(zero_key, entry(i, key), CURRENT_KEY_SIZE) == 0);
+            if (!skip_decode) {
+                best_score = UINT32_MAX;
+                best_k = 0;
+                for (uint32_t k = 0; k < array_size(master_key); k++) {
+                    mk = master_key[k];
+                    memcpy(filename, entry(i, filename), FILENAME_SIZE);
+                    decode((uint8_t*)filename, entry(i, key), FILENAME_SIZE, CURRENT_KEY_SIZE);
+                    uint32_t score = alphanum_score(filename, strnlen(filename, 0x20));
+                    if (score < best_score) {
+                        best_score = score;
+                        best_k = k;
+                    }
+                }
+                weight[best_k]++;
+            }
+        }
+        best_k = 0;
+        best_weight = 0;
+        for (uint32_t k = 0; k < array_size(master_key); k++) {
+            if (weight[k] > best_weight) {
+                best_weight = weight[k];
+                best_k = k;
+            }
+        }
+        mk = master_key[best_k];
+        if (best_k != 0)
+            printf("Using %s master key\n", master_key_name[best_k]);
+        printf("\n");
 
         // Store the data we'll need to reconstruct the archive to a JSON file
         json = json_value_init_object();
@@ -301,16 +366,26 @@ int main_utf8(int argc, char** argv)
         json_object_set_boolean(json_object(json), "64-bit", is_pak64);
         if (is_a22)
             json_object_set_boolean(json_object(json), "a22-extensions", true);
+        if (mk[0] != 0)
+            json_object_set_string(json_object(json), "master_key", mk);
 
         uint64_t file_data_offset = sizeof(pak_header) + (uint64_t)hdr.nb_files * CURRENT_ENTRY_SIZE;
         JSON_Value* json_files_array = json_value_init_array();
         printf("OFFSET    SIZE     NAME\n");
         for (uint32_t i = 0; i < hdr.nb_files; i++) {
-            int j;
-            for (j = 0; (j < 20) && (entry(i, key)[j] == 0); j++);
-            bool skip_decode = (j >= 20);
-            if (!skip_decode)
+            bool skip_decode = (memcmp(zero_key, entry(i, key), CURRENT_KEY_SIZE) == 0);
+            if (!skip_decode) {
                 decode((uint8_t*)entry(i, filename), entry(i, key), FILENAME_SIZE, CURRENT_KEY_SIZE);
+                for (int j = 0; j < FILENAME_SIZE && entry(i, filename)[j] != 0; j++) {
+                    char c = entry(i, filename)[j];
+                    if (c == 0)
+                        break;
+                    if (c < 0x20 || c > 0x7e) {
+                        fprintf(stderr, "ERROR: Failed to decode filename for entry %d\n", i);
+                        goto out;
+                    }
+                }
+            }
             for (size_t n = 0; n < strlen(entry(i, filename)); n++) {
                 if (entry(i, filename)[n] == '\\')
                     entry(i, filename)[n] = PATH_SEP;
@@ -359,6 +434,8 @@ int main_utf8(int argc, char** argv)
                 change_extension(_basename(argv[argc - 1]), ".json"));
             printf("Creating '%s'\n", path);
             json_serialize_to_file_pretty(json, path);
+        } else {
+            json_value_free(json_files_array);
         }
         r = 0;
     }
