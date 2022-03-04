@@ -81,11 +81,10 @@ typedef struct {
 // license agreement and therefore consider that there exist no legal barrier
 // to publishing it in this source, per "clean room design" rules.
 //
-static char* master_key[] = {
-    "",                                     // No master key
-    "dGGKXLHLuCJwv8aBc3YQX6X6sREVPchs",     // A23 master key
+static char* master_key[][2] = {
+    { "", "" },                                     // No master key
+    { "A23", "dGGKXLHLuCJwv8aBc3YQX6X6sREVPchs" },  // A23 master key
 };
-static char* master_key_name[] = { "", "A23" };
 const char* mk;
 
 static __inline void decode(uint8_t* a, uint8_t* k, uint32_t size, uint32_t key_size)
@@ -188,7 +187,7 @@ int main_utf8(int argc, char** argv)
         hdr.nb_files = json_object_get_uint32(json_object(json), "nb_files");
         mk = json_object_get_string(json_object(json), "master_key");
         if (mk == NULL)
-            mk = master_key[0];
+            mk = master_key[0][1];
         is_pak64 = json_object_get_boolean(json_object(json), "64-bit");
         is_a22 = json_object_get_boolean(json_object(json), "a22-extensions");
         if (is_a22 && !is_pak64) {
@@ -323,15 +322,18 @@ int main_utf8(int argc, char** argv)
 
         // Determine the master key that needs to be applied, if any
         char filename[FILENAME_SIZE];
-        uint32_t weight[array_size(master_key)], best_score, best_weight, best_k;
+        uint32_t weight[array_size(master_key)], best_score, best_weight, best_k, increment = 1;
         memset(weight, 0, array_size(master_key) * sizeof(uint32_t));
-        for (uint32_t i = 0; i < hdr.nb_files; i++) {
+        // 128-255 entries should be enough for our detection
+        if (hdr.nb_files > 0x80)
+            increment = hdr.nb_files / (hdr.nb_files / 0x80);
+        for (uint32_t i = 0; i < hdr.nb_files; i += increment) {
             bool skip_decode = (memcmp(zero_key, entry(i, key), CURRENT_KEY_SIZE) == 0);
             if (!skip_decode) {
                 best_score = UINT32_MAX;
                 best_k = 0;
                 for (uint32_t k = 0; k < array_size(master_key); k++) {
-                    mk = master_key[k];
+                    mk = master_key[k][1];
                     memcpy(filename, entry(i, filename), FILENAME_SIZE);
                     decode((uint8_t*)filename, entry(i, key), FILENAME_SIZE, CURRENT_KEY_SIZE);
                     uint32_t score = alphanum_score(filename, strnlen(filename, 0x20));
@@ -351,9 +353,9 @@ int main_utf8(int argc, char** argv)
                 best_k = k;
             }
         }
-        mk = master_key[best_k];
-        if (best_k != 0)
-            printf("Using %s master key\n", master_key_name[best_k]);
+        mk = master_key[best_k][1];
+        if (mk[0] != 0)
+            printf("Using %s master key\n", master_key[best_k][0]);
         printf("\n");
 
         // Store the data we'll need to reconstruct the archive to a JSON file
