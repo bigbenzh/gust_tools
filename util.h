@@ -132,7 +132,7 @@ static __inline uint32_t find_msb(uint32_t v)
 {
 #if defined (_MSC_VER)
     DWORD pos;
-    _BitScanReverse(&pos, v);
+    BitScanReverse(&pos, v);
     return pos;
 #else
     return 31- __builtin_clz(v);
@@ -143,7 +143,7 @@ static __inline uint32_t find_lsb(uint64_t v)
 {
 #if defined (_MSC_VER)
     DWORD pos;
-    _BitScanForward64(&pos, v);
+    BitScanForward64(&pos, v);
     return pos;
 #else
     return __builtin_ctzll(v);
