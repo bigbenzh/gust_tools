@@ -617,8 +617,8 @@ static uint32_t unscramble(uint8_t* payload, uint32_t payload_size, seed_data* s
                            uint32_t* working_size, uint32_t expected_version)
 {
     uint32_t version = getbe32(payload);
-    if (version == 0x03000000) {
-        version = 3;
+    if ((version & 0x00ffffff) == 0) {
+        version >>= 24;
         is_big_endian = false;
     }
     if ((version != 2) && (version != 3)) {
@@ -805,11 +805,12 @@ static void compute_prime_list(uint32_t max_value)
 int main_utf8(int argc, char** argv)
 {
     seed_data seeds;
-    char path[256];
+    char path[PATH_MAX];
     uint32_t src_size, dst_size;
     uint8_t *src = NULL, *dst = NULL;
     int r = -1;
     const char* app_name = _appname(argv[0]);
+    const char* dir_name = _dirname(argv[0]);
     if ((argc < 2) || ((argc == 3) && (*argv[1] != '-'))) {
         printf("%s %s (c) 2019-2021 VitaSmith\n\nUsage: %s [-GAME_ID] <file>\n\n"
             "Encode or decode a Gust .e file.\n\n"
@@ -821,7 +822,7 @@ int main_utf8(int argc, char** argv)
     }
 
     // Populate the descrambling seeds from the JSON file
-    snprintf(path, sizeof(path), "%s.json", app_name);
+    snprintf(path, sizeof(path), "%s%c%s.json", dir_name, PATH_SEP, app_name);
     JSON_Value* json = json_parse_file_with_comments(path);
     if (json == NULL) {
         fprintf(stderr, "ERROR: Can't parse JSON data from '%s'\n", path);

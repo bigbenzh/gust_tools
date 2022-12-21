@@ -1,7 +1,7 @@
-@rem This test script performs unpack and repack of G1T
-@rem textures and validates that the data matches.
-@rem The texture test files can be downloaded from:
-@rem https://vitasmith.rpc1.org/gust_tools/test_g1t.7z
+@rem This test script performs unpack and repack of G1T textures and
+@rem validates that the data matches.
+@rem The latest texture test files can be downloaded from:
+@rem https://github.com/VitaSmith/test_g1t/archive/refs/tags/2022-09-06.zip
 @rem
 @echo off
 setlocal EnableDelayedExpansion

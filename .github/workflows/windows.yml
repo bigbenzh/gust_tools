@@ -8,7 +8,7 @@ env:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-latest
 
     steps:
     - name: Checkout repository
@@ -18,11 +18,12 @@ jobs:
         submodules: recursive
 
     - name: Set version
+      shell: bash
       id: set_version
-      run: echo "::set-output name=version::$(git describe --tags --abbrev=0)"
+      run: echo "version=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1.0.3
+      uses: microsoft/setup-msbuild@v1
 
     - name: Build
       run: msbuild ${{ env.PROJECT_NAME }}.sln /m /p:Configuration=Release /p:Platform=x86 /p:AppVersion=${{ steps.set_version.outputs.version }}
