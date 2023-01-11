@@ -3,20 +3,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <LocalDebuggerCommandArguments>sophie2\saves\ability\ability_data_main.xml.e</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>strcombineall.xml.e</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
-    <LocalDebuggerCommandArguments>sophie2\saves\ability\ability_data_main.xml.e</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>strcombineall.xml.e</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <LocalDebuggerCommandArguments>sophie2\saves\ability\ability_data_main.xml.e</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>strcombineall.xml.e</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <LocalDebuggerCommandArguments>sophie2\saves\ability\ability_data_main.xml.e</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>strcombineall.xml.e</LocalDebuggerCommandArguments>
     <LocalDebuggerWorkingDirectory>$(SolutionDir)</LocalDebuggerWorkingDirectory>
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
   </PropertyGroup>

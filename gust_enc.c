@@ -825,8 +825,13 @@ int main_utf8(int argc, char** argv)
     snprintf(path, sizeof(path), "%s%c%s.json", dir_name, PATH_SEP, app_name);
     JSON_Value* json = json_parse_file_with_comments(path);
     if (json == NULL) {
-        fprintf(stderr, "ERROR: Can't parse JSON data from '%s'\n", path);
-        goto out;
+        // Fall back to default directory if dir_name didn't work
+        snprintf(path, sizeof(path), "%s.json", app_name);
+        json = json_parse_file_with_comments(path);
+        if (json == NULL) {
+            fprintf(stderr, "ERROR: Can't parse JSON data from '%s'\n", path);
+            goto out;
+        }
     }
     const char* seeds_id = (argc == 3) ? &argv[1][1] : json_object_get_string(json_object(json), "seeds_id");
     JSON_Array* seeds_array = json_object_get_array(json_object(json), "seeds");
