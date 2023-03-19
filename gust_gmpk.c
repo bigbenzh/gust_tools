@@ -662,7 +662,7 @@ int main_utf8(int argc, char** argv)
         sdp1_header* gmpk_sdp = (sdp1_header*)buf;
         assert(gmpk_sdp->entrymap_offset != 0);
         sdp1_header* entrymap_sdp = (sdp1_header*)&buf[gmpk_sdp->entrymap_offset];
-        assert(entrymap_sdp->entry_record_size >= 4);
+        assert(entrymap_sdp->entry_record_size >= 2);
         uint32_t* fp = (uint32_t*)&buf[gmpk_sdp->entrymap_offset + entrymap_sdp->entry_offset];
         uint32_t offset = gmpk_sdp->size;
         file_entry* fe = (file_entry*)&buf[offset];
