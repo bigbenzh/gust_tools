@@ -12,7 +12,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       with:
         fetch-depth: 0
         submodules: recursive
@@ -29,7 +29,7 @@ jobs:
       run: msbuild ${{ env.PROJECT_NAME }}.sln /m /p:Configuration=Release /p:Platform=x86 /p:AppVersion=${{ steps.set_version.outputs.version }}
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: ${{ env.PROJECT_NAME }}
         path: ./x86/Release/*.exe
@@ -43,8 +43,7 @@ jobs:
     - name: Upload release
       uses: softprops/action-gh-release@v1
       if: startsWith(github.ref, 'refs/tags/')
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
+        token: ${{ secrets.GITHUB_TOKEN }}
         body: ${{ env.FRIENDLY_NAME}} ${{ steps.set_version.outputs.version }}
         files: ./*.zip
