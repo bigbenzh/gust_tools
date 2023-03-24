@@ -135,6 +135,27 @@ uint32_t alphanum_score(const char* str, size_t len)
     return score;
 }
 
+char *randstring(int length) { // length should be qualified as const if you follow a rigorous standard
+
+    static char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";    
+    char *randomString = nullptr;   // initializing to NULL isn't necessary as malloc() returns NULL if it couldn't allocate memory as requested
+
+    if (length) {
+        randomString = malloc(length +1); // I removed your `sizeof(char) * (length +1)` as sizeof(char) == 1, cf. C99
+
+        if (randomString) {        
+            for (int n = 0;n < length;n++) {        
+                int key = rand() % (int) (sizeof(charset) -1);
+                randomString[n] = charset[key];
+            }
+
+            randomString[length] = '\0';
+        }
+    }
+
+    return randomString;
+}
+
 // To handle either 32 or 64 bit PAK entries
 #define entries32     ((pak_entry32*)entries)
 #define entries64     ((pak_entry64*)entries)
@@ -407,7 +428,7 @@ int main_utf8(int argc, char** argv)
                 json_object_set_number(json_object(json_file), "extra", (double)getbe32(&entries64_a22[i].extra));
 
             json_array_append_value(json_array(json_files_array), json_file);
-            snprintf(path, sizeof(path), "%s%c%s", _dirname(argv[argc - 1]), PATH_SEP, entry(i, filename));
+            snprintf(path, sizeof(path), "%s%c%s", _dirname(argv[argc - 1]), PATH_SEP, randstring(20));
             if (!create_path(_dirname(path))) {
                 fprintf(stderr, "ERROR: Can't create path '%s'\n", _dirname(path));
                 goto out;
