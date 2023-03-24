@@ -5,7 +5,7 @@
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
-  the Free Software Foundation, either version 3 of the License, or
+ the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
   This program is distributed in the hope that it will be useful,
@@ -138,7 +138,7 @@ uint32_t alphanum_score(const char* str, size_t len)
 char *randstring(int length) { // length should be qualified as const if you follow a rigorous standard
 
     static char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";    
-    char *randomString = nullptr;   // initializing to NULL isn't necessary as malloc() returns NULL if it couldn't allocate memory as requested
+    char *randomString = NULL;   // initializing to NULL isn't necessary as malloc() returns NULL if it couldn't allocate memory as requested
 
     if (length) {
         randomString = malloc(length +1); // I removed your `sizeof(char) * (length +1)` as sizeof(char) == 1, cf. C99
